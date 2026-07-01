@@ -1,0 +1,4 @@
+nicegui>=1.4.21
+playwright>=1.44.0
+python-dotenv>=1.0.0
+pyodbc>=5.1.0

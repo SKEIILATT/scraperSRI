@@ -1,0 +1,47 @@
+# Entorno virtual
+.venv/
+venv/
+env/
+
+# Variables de entorno (nunca subir credenciales)
+.env
+
+# Descargas generadas por la app
+downloads/
+
+# Perfil persistente del navegador (cookies, cache de Google)
+browser_profile/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+
+# Distribucion / empaquetado
+dist/
+build/
+*.egg-info/
+*.egg
+
+# Screenshots de debug (excluir todos los PNG salvo el logo de la app)
+*.png
+!logo_bg_magenta.png
+
+# Logs
+*.log
+logs/
+
+# NiceGUI storage interno
+.nicegui/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Windows
+Thumbs.db
+desktop.ini
