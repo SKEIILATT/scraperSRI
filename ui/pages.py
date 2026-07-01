@@ -297,20 +297,54 @@ async def pagina_credenciales_sri():
                     return "El RUC o cedula es obligatorio."
                 if not re.match(r"^\d{10}$|^\d{13}$", ruc):
                     return "Debe tener 10 digitos (cedula) o 13 digitos (RUC)."
-                # Validacion de digito verificador para cedula (10 digitos)
-                if len(ruc) == 10 or (len(ruc) == 13 and ruc[2] in "0123456"):
-                    cedula = ruc[:10]
-                    provincia = int(cedula[:2])
-                    if not (1 <= provincia <= 24):
-                        return "Codigo de provincia invalido (primeros 2 digitos)."
+
+                provincia = int(ruc[:2])
+                if not (1 <= provincia <= 24):
+                    return "Codigo de provincia invalido (primeros 2 digitos)."
+
+                tercer = int(ruc[2])
+
+                if tercer < 6:
+                    # Persona natural: modulo 10 sobre primeros 10 digitos
+                    base = ruc[:10]
                     coefs = [2, 1, 2, 1, 2, 1, 2, 1, 2]
                     total = sum(
-                        (d - 10 if d >= 10 else d)
-                        for d in (c * int(n) for c, n in zip(coefs, cedula[:9]))
+                        (d - 9 if d >= 10 else d)
+                        for d in (c * int(n) for c, n in zip(coefs, base[:9]))
                     )
                     verificador = (10 - (total % 10)) % 10
-                    if verificador != int(cedula[9]):
-                        return "El numero de cedula no es valido (digito verificador incorrecto)."
+                    if verificador != int(base[9]):
+                        return "El numero de cedula o RUC no es valido (digito verificador incorrecto)."
+                    if len(ruc) == 13 and ruc[10:] == "000":
+                        return "El codigo de establecimiento del RUC no puede ser 000."
+
+                elif tercer == 6:
+                    # Entidad publica: modulo 11 sobre primeros 8 digitos
+                    coefs = [3, 2, 7, 6, 5, 4, 3, 2]
+                    total = sum(c * int(n) for c, n in zip(coefs, ruc[:8]))
+                    verificador = 11 - (total % 11)
+                    if verificador in (10, 11):
+                        verificador = 0
+                    if len(ruc) != 13:
+                        return "RUC de entidad publica debe tener 13 digitos."
+                    if verificador != int(ruc[8]):
+                        return "El RUC de entidad publica no es valido (digito verificador incorrecto)."
+
+                elif tercer == 9:
+                    # Sociedad privada / extranjero: modulo 11 sobre primeros 9 digitos
+                    coefs = [4, 3, 2, 7, 6, 5, 4, 3, 2]
+                    total = sum(c * int(n) for c, n in zip(coefs, ruc[:9]))
+                    verificador = 11 - (total % 11)
+                    if verificador in (10, 11):
+                        verificador = 0
+                    if len(ruc) != 13:
+                        return "RUC de sociedad debe tener 13 digitos."
+                    if verificador != int(ruc[9]):
+                        return "El RUC de sociedad no es valido (digito verificador incorrecto)."
+
+                else:
+                    return "El tercer digito del RUC no es valido."
+
                 return ""
 
             def validar_y_continuar():
