@@ -240,18 +240,24 @@ class ScrapingOrchestrator:
                         f"{fila.tipo_y_serie}"
                     )
 
-                    # Descargar XML
+                    # Descargar XML (omitir si ya existe en disco)
                     ruta_xml = str(ruta_descarga(p.ruc, p.anio, p.mes, fila.tipo_y_serie, "xml", fila.es_retencion))
-                    ok_xml = await descargar_xml(page, fila.indice, ruta_xml)
+                    if Path(ruta_xml).exists():
+                        ok_xml = True
+                    else:
+                        ok_xml = await descargar_xml(page, fila.indice, ruta_xml)
                     fila.xml_descargado = ok_xml
                     if not ok_xml:
                         msg = f"XML fallido: {fila.tipo_y_serie}"
                         fila.error = msg
                         self._estado.errores.append(msg)
 
-                    # Descargar PDF/RIDE
+                    # Descargar PDF/RIDE (omitir si ya existe en disco)
                     ruta_pdf = str(ruta_descarga(p.ruc, p.anio, p.mes, fila.tipo_y_serie, "pdf", fila.es_retencion))
-                    ok_pdf = await descargar_pdf(page, fila.indice, ruta_pdf)
+                    if Path(ruta_pdf).exists():
+                        ok_pdf = True
+                    else:
+                        ok_pdf = await descargar_pdf(page, fila.indice, ruta_pdf)
                     fila.pdf_descargado = ok_pdf
                     if not ok_pdf:
                         msg = f"PDF fallido: {fila.tipo_y_serie}"

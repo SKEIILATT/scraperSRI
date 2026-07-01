@@ -197,8 +197,8 @@ async def pagina_login():
                 s["paso"] = 2
                 ui.navigate.to("/credenciales-sri")
 
-            codigo_input.on("keydown.enter", lambda: asyncio.create_task(hacer_login()))
-            usuario_input.on("keydown.enter", lambda: asyncio.create_task(hacer_login()))
+            codigo_input.on("keydown.enter", hacer_login)
+            usuario_input.on("keydown.enter", hacer_login)
 
             ui.element("div").style("margin-top:24px;")
             btn_ingresar = btn_primario("Ingresar", on_click=hacer_login, ancho_completo=True)
@@ -236,6 +236,19 @@ async def pagina_credenciales_sri():
                 "Ingrese las credenciales del portal SRI en linea del contribuyente. "
                 "Estos datos no se almacenan en disco."
             )
+
+            # Aviso de bloqueo
+            with ui.element("div").style(
+                f"background:#FFFBEB; border:1.5px solid #F59E0B; border-radius:8px; "
+                f"padding:12px 16px; margin-bottom:20px;"
+            ):
+                ui.label(
+                    "El SRI bloquea la cuenta tras varios intentos fallidos. "
+                    "Verifique bien su clave antes de continuar — se le pedira confirmarla."
+                ).style(
+                    f"font-size:13px; color:#92400E; font-family:'Inter',sans-serif; line-height:1.5;"
+                )
+
             divider()
 
             _label_campo("RUC o Cedula")
@@ -255,10 +268,21 @@ async def pagina_credenciales_sri():
             )
             lbl_err_pass = _lbl_error()
 
-            def toggle_password(e):
-                pass_input.props("type=text" if e.value else "type=password")
+            _input_separador()
+            _label_campo("Confirmar contrasena SRI")
+            pass_confirm_input = (
+                ui.input(password=True, placeholder="Repita su clave SRI")
+                .props("outlined dense")
+                .style("width:100%;")
+            )
+            lbl_err_confirm = _lbl_error()
 
-            ui.checkbox("Mostrar contrasena", on_change=toggle_password).style(
+            def toggle_password(e):
+                tipo = "type=text" if e.value else "type=password"
+                pass_input.props(tipo)
+                pass_confirm_input.props(tipo)
+
+            ui.checkbox("Mostrar contrasenas", on_change=toggle_password).style(
                 f"font-size:12px; color:{GRIS_MEDIO}; margin-top:6px;"
             )
 
@@ -267,22 +291,56 @@ async def pagina_credenciales_sri():
                 f"display:block; margin-top:10px;"
             )
 
+            def _validar_ruc(ruc: str) -> str:
+                """Retorna mensaje de error o cadena vacia si es valido."""
+                if not ruc:
+                    return "El RUC o cedula es obligatorio."
+                if not re.match(r"^\d{10}$|^\d{13}$", ruc):
+                    return "Debe tener 10 digitos (cedula) o 13 digitos (RUC)."
+                # Validacion de digito verificador para cedula (10 digitos)
+                if len(ruc) == 10 or (len(ruc) == 13 and ruc[2] in "0123456"):
+                    cedula = ruc[:10]
+                    provincia = int(cedula[:2])
+                    if not (1 <= provincia <= 24):
+                        return "Codigo de provincia invalido (primeros 2 digitos)."
+                    coefs = [2, 1, 2, 1, 2, 1, 2, 1, 2]
+                    total = sum(
+                        (d - 10 if d >= 10 else d)
+                        for d in (c * int(n) for c, n in zip(coefs, cedula[:9]))
+                    )
+                    verificador = (10 - (total % 10)) % 10
+                    if verificador != int(cedula[9]):
+                        return "El numero de cedula no es valido (digito verificador incorrecto)."
+                return ""
+
             def validar_y_continuar():
                 lbl_err_ruc.set_text("")
                 lbl_err_pass.set_text("")
+                lbl_err_confirm.set_text("")
                 lbl_err_gen.set_text("")
 
                 ruc = (ruc_input.value or "").strip()
                 pwd = pass_input.value or ""
+                pwd_confirm = pass_confirm_input.value or ""
 
-                if not ruc:
-                    lbl_err_ruc.set_text("El RUC o cedula es obligatorio.")
+                err_ruc = _validar_ruc(ruc)
+                if err_ruc:
+                    lbl_err_ruc.set_text(err_ruc)
                     return
-                if not re.match(r"^\d{10}$|^\d{13}$", ruc):
-                    lbl_err_ruc.set_text("Debe tener 10 digitos (cedula) o 13 digitos (RUC).")
-                    return
+
                 if not pwd:
                     lbl_err_pass.set_text("La contrasena es obligatoria.")
+                    return
+                if len(pwd) < 6:
+                    lbl_err_pass.set_text("La contrasena debe tener al menos 6 caracteres.")
+                    return
+
+                if not pwd_confirm:
+                    lbl_err_confirm.set_text("Por favor confirme su contrasena.")
+                    return
+                if pwd != pwd_confirm:
+                    lbl_err_confirm.set_text("Las contrasenas no coinciden. Verifique e intente de nuevo.")
+                    pass_confirm_input.value = ""
                     return
 
                 s["sri_ruc"] = ruc
@@ -292,6 +350,7 @@ async def pagina_credenciales_sri():
 
             ruc_input.on("keydown.enter", validar_y_continuar)
             pass_input.on("keydown.enter", validar_y_continuar)
+            pass_confirm_input.on("keydown.enter", validar_y_continuar)
 
             with ui.element("div").style("display:flex; gap:10px; margin-top:24px;"):
                 btn_secundario("Atras", on_click=lambda: ui.navigate.to("/"))
@@ -578,6 +637,38 @@ async def pagina_resultado():
                         f"font-size:14px; color:{SUCCESS_COLOR}; margin-top:6px; display:block;"
                     )
 
+            # Opcion de guardar credenciales para sync automatica
+            if completados > 0:
+                ruc_sync = s.get("sri_ruc", "")
+                pwd_sync = s.get("sri_password", "")
+                if ruc_sync and pwd_sync:
+                    from storage.credentials import guardar as _guardar_cred, tiene_credenciales as _tiene_cred
+                    ya_guardadas = _tiene_cred(ruc_sync)
+                    lbl_cred = ui.label(
+                        "Credenciales ya guardadas para sincronizacion automatica." if ya_guardadas
+                        else ""
+                    ).style(f"font-size:12px; color:{SUCCESS_COLOR}; display:block; margin-top:6px;")
+
+                    def _toggle_guardar_cred(e):
+                        if e.value:
+                            try:
+                                _guardar_cred(ruc_sync, pwd_sync)
+                                lbl_cred.set_text("Credenciales guardadas correctamente.")
+                                lbl_cred.style(f"font-size:12px; color:{SUCCESS_COLOR}; display:block; margin-top:6px;")
+                            except Exception as exc:
+                                lbl_cred.set_text(f"No se pudieron guardar: {exc}")
+                                lbl_cred.style(f"font-size:12px; color:{ERROR_COLOR}; display:block; margin-top:6px;")
+
+                    ui.checkbox(
+                        "Guardar credenciales para sincronizacion automatica nocturna",
+                        value=ya_guardadas,
+                        on_change=_toggle_guardar_cred,
+                    ).style(
+                        f"font-size:13px; color:{GRIS_OSCURO}; margin-top:12px; "
+                        f"font-family:'Inter',sans-serif;"
+                    )
+                    ui.element("div").append(lbl_cred)
+
             divider()
 
             # Panel de errores parciales
@@ -632,7 +723,7 @@ async def pagina_resultado():
 
                         try:
                             origen = Path(carpeta_descarga)
-                            destino_path = Path(destino)
+                            destino_path = Path(destino) / origen.name
                             destino_path.mkdir(parents=True, exist_ok=True)
                             copiados = 0
                             for archivo in origen.iterdir():
@@ -722,12 +813,8 @@ async def pagina_historial():
                 ruc_input = ui.input(placeholder="Filtrar por RUC...").style(
                     "width:220px; font-size:13px;"
                 )
-                btn_primario("Buscar", on_click=lambda: asyncio.create_task(
-                    _cargar_tabla(tabla_container, ruc_input.value, bypass_activo)
-                ))
-                btn_secundario("Ver todos", on_click=lambda: asyncio.create_task(
-                    _cargar_tabla(tabla_container, "", bypass_activo)
-                ))
+                btn_primario("Buscar", on_click=lambda: _cargar_tabla(tabla_container, ruc_input.value, bypass_activo))
+                btn_secundario("Ver todos", on_click=lambda: _cargar_tabla(tabla_container, "", bypass_activo))
 
             divider()
 
