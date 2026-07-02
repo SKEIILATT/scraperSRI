@@ -75,14 +75,22 @@ def header():
 
         # Controles derecha del header
         with ui.element("div").style("display:flex; align-items:center; gap:10px;"):
-            ui.link("Ver historial", "/historial").style(
-                f"font-size:13px; font-weight:600; color:{MAGENTA}; "
-                f"font-family:'Inter',sans-serif; text-decoration:none; "
-                f"padding:9px 20px; border-radius:8px; "
-                f"border:2px solid {MAGENTA}; "
-                f"white-space:nowrap;"
-            )
             if _nicegui_app.storage.user.get("autenticado"):
+                ui.link("Archivos", "/archivos").style(
+                    f"font-size:13px; font-weight:600; color:{NAVY_MED}; "
+                    f"font-family:'Inter',sans-serif; text-decoration:none; "
+                    f"padding:9px 16px; border-radius:8px; "
+                    f"border:2px solid {NAVY_LIGHT}; "
+                    f"white-space:nowrap;"
+                )
+                ui.link("Historial", "/historial").style(
+                    f"font-size:13px; font-weight:600; color:{MAGENTA}; "
+                    f"font-family:'Inter',sans-serif; text-decoration:none; "
+                    f"padding:9px 16px; border-radius:8px; "
+                    f"border:2px solid {MAGENTA}; "
+                    f"white-space:nowrap;"
+                )
+
                 def _cerrar_sesion():
                     for k in list(_nicegui_app.storage.user.keys()):
                         del _nicegui_app.storage.user[k]

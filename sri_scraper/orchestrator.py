@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Callable, Awaitable
 
 from .browser import BrowserManager
-from .humanize import pausa
+from .humanize import pausa, simular_lectura
 from .login import login_sri, ErrorCredenciales, ErrorRecaptcha, ErrorLoginTimeout
 from .consulta import (
     navegar_a_comprobantes,
@@ -93,7 +93,9 @@ class ScrapingOrchestrator:
             # --- Fase 1: Login ---
             await self._notificar("Iniciando navegador")
             page = await self._browser.iniciar()
-            await self._browser.minimizar()
+            # No se minimiza la ventana: mantenerla visible evita que el navegador
+            # entre en estado "hidden" (document.visibilityState/rAF pausado), que
+            # reCAPTCHA Enterprise usa como senal de comportamiento no humano.
 
             await self._notificar("Autenticando en SRI en linea")
 
@@ -130,6 +132,15 @@ class ScrapingOrchestrator:
                 self._estado.finalizado = True
                 await self._notificar("Error de conexion")
                 return self._estado
+
+            if self._cancelar:
+                return self._estado
+
+            # --- Fase 1.5: Warm-up de sesion ---
+            # Visitar el perfil del SRI antes de ir a comprobantes.
+            # Google ve actividad humana real en la sesion y sube el score reCAPTCHA.
+            await self._notificar("Preparando sesion")
+            await self._calentar_sesion(page)
 
             if self._cancelar:
                 return self._estado
@@ -173,13 +184,15 @@ class ScrapingOrchestrator:
                 except ErrorCaptchaConsulta:
                     if _intento_captcha < 3:
                         logger.info(
-                            "CAPTCHA bloqueo el formulario (intento %d/3). Reintentando con mas demora...",
+                            "CAPTCHA bloqueo el formulario (intento %d/3). Recargando formulario y reintentando...",
                             _intento_captcha,
                         )
                         await self._notificar(
                             f"CAPTCHA en formulario - reintentando ({_intento_captcha}/3)"
                         )
-                        await pausa(3000, 5000)
+                        # Espera larga y recarga el formulario para obtener token fresco
+                        await pausa(5000, 9000)
+                        await navegar_a_comprobantes(page, p.ruc, p.password)
                         continue
                     # 3 intentos automaticos fallaron — pedir intervencion manual
                     self._estado.requiere_intervencion = True
@@ -278,6 +291,13 @@ class ScrapingOrchestrator:
             await self._notificar(resumen)
             await self._registrar_en_bd(p, str(carpeta))
 
+            from storage.notificaciones import notificar
+            _msg = (
+                f"{self._estado.completados} comprobantes descargados para RUC {p.ruc}"
+                + (f"\n{len(self._estado.errores)} con errores." if self._estado.errores else "")
+            )
+            await asyncio.to_thread(notificar, "Descarga completada", _msg)
+
         except Exception as exc:
             logger.exception("Error no controlado en orquestador: %s", exc)
             self._estado.errores.append(f"Error inesperado: {exc}")
@@ -325,16 +345,32 @@ class ScrapingOrchestrator:
 
     async def _esperar_intervencion(self, page) -> None:
         """
-        Restaura la ventana del navegador, espera a que el usuario resuelva
-        la intervencion y luego vuelve a minimizarla.
+        Restaura la ventana del navegador y espera a que el usuario resuelva
+        la intervencion. La ventana se mantiene visible (no se vuelve a minimizar).
         """
         logger.info("Esperando intervencion del usuario...")
         await self._browser.mostrar()
         while self._estado.requiere_intervencion and not self._cancelar:
             await asyncio.sleep(1)
-        await self._browser.minimizar()
 
     def resolver_intervencion(self) -> None:
         """Llamado desde la UI cuando el usuario confirma que resolvio el captcha."""
         self._estado.requiere_intervencion = False
         self._estado.mensaje_intervencion = ""
+
+    async def _calentar_sesion(self, page) -> None:
+        """
+        Visita brevemente el perfil del SRI antes de ir a comprobantes.
+        Google ve actividad humana real en la sesion y sube el score reCAPTCHA
+        del formulario de comprobantes que viene despues.
+        """
+        urls_warmup = [
+            "https://srienlinea.sri.gob.ec/sri-en-linea/contribuyente/perfil",
+        ]
+        for url in urls_warmup:
+            try:
+                logger.info("Warm-up: visitando %s", url)
+                await page.goto(url, wait_until="domcontentloaded", timeout=20_000)
+                await simular_lectura(page, segundos_min=6.0, segundos_max=11.0)
+            except Exception as e:
+                logger.debug("Warm-up omitido para %s: %s", url, e)

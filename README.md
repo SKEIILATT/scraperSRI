@@ -153,12 +153,13 @@ El script genera screenshots (`recaptcha_estado_login.png`, etc.) y reporta el r
 1. Editar `.env`:
    ```
    AUTH_BYPASS_MODE=false
-   DB_HOST=servidor-sqlserver.bancog.internal
-   DB_PORT=1433
-   DB_NAME=STAGING
-   DB_USER=usuario_app
-   DB_PASSWORD=password_seguro
+   DB_HOST=GYEINTNEGDB01
+   DB_PORT=4433
+   DB_NAME=PROCESOS_BI
    ```
+   La conexion usa autenticacion integrada de Windows (`Trusted_Connection=yes`),
+   no requiere usuario ni contrasena — usa las credenciales de Windows del proceso
+   que ejecuta la app.
 
 2. La funcion `validar_colaborador()` en `auth/colaborador.py` ya contiene la logica
    SQL para consultar `STAGING.DBO.DW_DIM_COLABORADORES`. No se necesita modificar
@@ -181,11 +182,10 @@ Ver `.env.example` para la lista completa documentada.
 | Variable | Descripcion | Default |
 |----------|-------------|---------|
 | `AUTH_BYPASS_MODE` | Saltar validacion de BD de colaboradores | `true` |
-| `DB_HOST` | Host SQL Server | `localhost` |
-| `DB_PORT` | Puerto SQL Server | `1433` |
-| `DB_NAME` | Nombre de base de datos | `STAGING` |
-| `DB_USER` | Usuario SQL Server | `sa` |
-| `DB_PASSWORD` | Password SQL Server | _(vacio)_ |
+| `VERIFICAR_AREA` | Exigir centro de costo autorizado ademas del login | `false` |
+| `DB_HOST` | Host SQL Server | `GYEINTNEGDB01` |
+| `DB_PORT` | Puerto SQL Server | `4433` |
+| `DB_NAME` | Nombre de base de datos (produccion: `PROCESOS_BI`) | `PROCESOS_BI` |
 | `APP_HOST` | IP de escucha de la app | `0.0.0.0` |
 | `APP_PORT` | Puerto de la app | `8080` |
 | `APP_SECRET_KEY` | Clave de sesiones (cambiar en produccion) | `change_me` |

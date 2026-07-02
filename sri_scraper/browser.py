@@ -25,12 +25,38 @@ _UA = (
     "Chrome/126.0.0.0 Safari/537.36"
 )
 
-# Script que elimina la propiedad navigator.webdriver antes de que cargue la pagina
+# Script que elimina webdriver y agrega senales de navegador humano
 _STEALTH_SCRIPT = """
-Object.defineProperty(navigator, 'webdriver', {
-    get: () => undefined,
+// Ocultar webdriver
+Object.defineProperty(navigator, 'webdriver', { get: () => undefined, configurable: true });
+
+// Tracking de posicion del mouse para que el codigo Python sepa desde donde partir
+window._mouseX = Math.floor(Math.random() * 400) + 200;
+window._mouseY = Math.floor(Math.random() * 300) + 100;
+document.addEventListener('mousemove', function(e) {
+    window._mouseX = e.clientX;
+    window._mouseY = e.clientY;
+}, { passive: true });
+
+// Plugins simulados (navegador real siempre tiene plugins)
+Object.defineProperty(navigator, 'plugins', {
+    get: () => {
+        const arr = [
+            { name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer', description: 'Portable Document Format' },
+            { name: 'Chrome PDF Viewer', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai', description: '' },
+            { name: 'Native Client', filename: 'internal-nacl-plugin', description: '' },
+        ];
+        arr.item = (i) => arr[i];
+        arr.namedItem = (n) => arr.find(p => p.name === n) || null;
+        arr.refresh = () => {};
+        Object.setPrototypeOf(arr, PluginArray.prototype);
+        return arr;
+    },
     configurable: true
 });
+
+// Languages
+Object.defineProperty(navigator, 'languages', { get: () => ['es-EC', 'es', 'en-US', 'en'], configurable: true });
 """
 
 
@@ -60,19 +86,45 @@ class BrowserManager:
 
         self._playwright = await async_playwright().start()
 
-        self._context = await self._playwright.chromium.launch_persistent_context(
-            str(perfil),
+        launch_kwargs = dict(
             headless=settings.BROWSER_HEADLESS,
             args=[
                 "--disable-blink-features=AutomationControlled",
                 "--no-first-run",
                 "--no-default-browser-check",
             ],
-            user_agent=_UA,
             viewport={"width": 1366, "height": 768},
             locale="es-EC",
             timezone_id="America/Guayaquil",
         )
+
+        # Preferir un Chrome/Edge ya instalado en el equipo, apuntando directo
+        # al ejecutable (evita depender de deteccion de canal por registro de
+        # Windows y evita descargar el Chromium bundled de Playwright).
+        rutas_candidatas = (
+            [settings.BROWSER_EXECUTABLE_PATH]
+            if settings.BROWSER_EXECUTABLE_PATH
+            else settings.BROWSER_EXECUTABLE_CANDIDATES
+        )
+        ejecutable = next((r for r in rutas_candidatas if r and os.path.isfile(r)), None)
+
+        if ejecutable:
+            # No se sobreescribe user_agent: el ejecutable real ya envia un UA
+            # consistente con sus propios headers Sec-CH-UA (Client Hints). Forzar
+            # un UA distinto (p.ej. "Chrome" sobre un binario de Edge) crea una
+            # discrepancia de fingerprint que reCAPTCHA Enterprise usa como senal de bot.
+            logger.info("Navegador iniciado con ejecutable: %s", ejecutable)
+            self._context = await self._playwright.chromium.launch_persistent_context(
+                str(perfil), executable_path=ejecutable, **launch_kwargs
+            )
+        else:
+            logger.warning(
+                "No se encontro Chrome/Edge instalado en las rutas conocidas. "
+                "Usando Chromium bundled de Playwright (requiere 'playwright install chromium')."
+            )
+            self._context = await self._playwright.chromium.launch_persistent_context(
+                str(perfil), user_agent=_UA, **launch_kwargs
+            )
 
         # Enmascarar navigator.webdriver en todas las paginas nuevas
         await self._context.add_init_script(_STEALTH_SCRIPT)

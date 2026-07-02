@@ -70,13 +70,6 @@ def _consultar_rucs_activos(periodos: list[tuple[int, int]]) -> list[dict]:
     try:
         import pyodbc
 
-        conn_str = (
-            f"DRIVER={{ODBC Driver 17 for SQL Server}};"
-            f"SERVER={settings.DB_HOST},{settings.DB_PORT};"
-            f"DATABASE={settings.DB_NAME};"
-            f"UID={settings.DB_USER};"
-            f"PWD={settings.DB_PASSWORD}"
-        )
         placeholders = ",".join(["(?,?)"] * len(periodos))
         params: list = []
         for anio, mes in periodos:
@@ -91,7 +84,7 @@ def _consultar_rucs_activos(periodos: list[tuple[int, int]]) -> list[dict]:
             "ORDER BY RUC_CONTRIBUYENTE, PERIODO_ANIO DESC, PERIODO_MES DESC"
         )
 
-        with pyodbc.connect(conn_str, timeout=10) as conn:
+        with pyodbc.connect(settings.get_connection_string(), timeout=30) as conn:
             cursor = conn.cursor()
             cursor.execute(sql, *params)
             cols = [c[0].lower() for c in cursor.description]
@@ -141,6 +134,14 @@ async def _sincronizar_uno(ruc: str, anio: int, mes: int, tipo: str) -> None:
         logger.info(
             "RUC=%s periodo=%d/%02d tipo=%s — %d nuevos descargados.",
             ruc, anio, mes, tipo, nuevos,
+        )
+
+    if nuevos > 0:
+        from storage.notificaciones import notificar
+        notificar(
+            "Sincronizacion nocturna",
+            f"{nuevos} comprobante{'s' if nuevos != 1 else ''} nuevo{'s' if nuevos != 1 else ''} "
+            f"para RUC {ruc} ({mes:02d}/{anio})",
         )
 
 

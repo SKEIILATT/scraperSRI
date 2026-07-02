@@ -13,7 +13,10 @@ from typing import Callable, Awaitable
 
 from playwright.async_api import Page, TimeoutError as PlaywrightTimeout
 
-from .humanize import escribir_humanizado, mover_y_click, pausa, seleccionar_opcion, simular_lectura
+from .humanize import (
+    escribir_humanizado, mover_y_click, pausa, seleccionar_opcion,
+    simular_lectura, simular_lectura_formulario, acercarse_lento,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -291,6 +294,15 @@ async def navegar_a_comprobantes(
     )
 
 
+_CAMPOS_FORMULARIO = [
+    "#frmPrincipal\\:ano",
+    "#frmPrincipal\\:mes",
+    "#frmPrincipal\\:dia",
+    "#frmPrincipal\\:cmbTipoComprobante",
+    "#frmPrincipal\\:btnBuscar",
+]
+
+
 async def aplicar_filtros(
     page: Page,
     anio: str,
@@ -304,22 +316,29 @@ async def aplicar_filtros(
     """
     logger.info("Aplicando filtros: anio=%s mes=%s dia=%s tipo=%s", anio, mes, dia, tipo_comprobante)
 
-    # Simular lectura del formulario antes de interactuar — el reCAPTCHA invisible
-    # evalua el comportamiento desde que carga la pagina y mejora el score con actividad natural.
-    await simular_lectura(page, segundos_min=4.0, segundos_max=7.0)
+    # Fase 1: lectura larga de la pagina — reCAPTCHA evalua el tiempo y movimiento
+    # desde que carga hasta la primera interaccion
+    await simular_lectura(page, segundos_min=8.0, segundos_max=14.0)
 
+    # Fase 2: revisar visualmente los campos del formulario antes de tocarlos
+    await simular_lectura_formulario(page, _CAMPOS_FORMULARIO)
+
+    # Fase 3: seleccionar filtros con pausas largas (humano que piensa entre selecciones)
     await seleccionar_opcion(page, "#frmPrincipal\\:ano", anio)
-    await pausa(700, 1400)
+    await pausa(2000, 4000)
     await seleccionar_opcion(page, "#frmPrincipal\\:mes", mes)
-    await pausa(700, 1400)
+    await pausa(2000, 4000)
     await seleccionar_opcion(page, "#frmPrincipal\\:dia", dia)
-    await pausa(700, 1400)
+    await pausa(2000, 3500)
     await seleccionar_opcion(page, "#frmPrincipal\\:cmbTipoComprobante", tipo_comprobante)
 
-    # Pausa larga antes del submit — dar tiempo al reCAPTCHA para evaluar la sesion
-    await pausa(2500, 4500)
+    # Fase 4: pausa larga post-seleccion — como si el usuario revisara antes de enviar
+    await pausa(3000, 6000)
 
-    # Click en boton Consultar y esperar respuesta AJAX de PrimeFaces
+    # Fase 5: acercarse lentamente al boton Consultar (movimiento deliberado)
+    await acercarse_lento(page, "#frmPrincipal\\:btnBuscar")
+
+    # Fase 6: click en Consultar
     try:
         async with page.expect_response(
             lambda r: "comprobantesRecibidos" in r.url and r.request.method == "POST",

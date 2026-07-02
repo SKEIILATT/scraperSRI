@@ -80,40 +80,37 @@ def registrar_sesion(registro: RegistroSesion) -> None:
     _insertar_en_db(registro)
 
 
-def consultar_sesiones(ruc_filtro: str = "", limite: int = 200) -> list[dict]:
+def consultar_sesiones(ruc_filtro: str = "", codigo_colaborador: str = "", limite: int = 200) -> list[dict]:
     """
-    Retorna las sesiones registradas en T_COMPROBANTES_SRI ordenadas por fecha descendente.
+    Retorna las sesiones registradas en T_COMPROBANTES_SRI ordenadas por fecha descendente,
+    restringidas al colaborador indicado (cada usuario solo ve sus propias descargas).
     En modo bypass retorna lista vacia.
     """
     if settings.AUTH_BYPASS_MODE:
         return []
-    return _consultar_db(ruc_filtro.strip(), limite)
+    if not codigo_colaborador:
+        return []
+    return _consultar_db(ruc_filtro.strip(), codigo_colaborador.strip(), limite)
 
 
-def _consultar_db(ruc_filtro: str, limite: int) -> list[dict]:
+def _consultar_db(ruc_filtro: str, codigo_colaborador: str, limite: int) -> list[dict]:
     try:
         import pyodbc
 
-        conn_str = (
-            f"DRIVER={{ODBC Driver 17 for SQL Server}};"
-            f"SERVER={settings.DB_HOST},{settings.DB_PORT};"
-            f"DATABASE={settings.DB_NAME};"
-            f"UID={settings.DB_USER};"
-            f"PWD={settings.DB_PASSWORD}"
-        )
         sql = (
             "SELECT TOP (?) ID, FECHA_DESCARGA, RUC_CONTRIBUYENTE, PERIODO_ANIO, PERIODO_MES, "
             "TIPO_COMPROBANTE_DESC, TOTAL_ENCONTRADOS, TOTAL_DESCARGADOS, TOTAL_ERRORES, "
             "ESTADO, CARPETA_DESTINO, CODIGO_COLABORADOR, USUARIO_COLABORADOR "
             "FROM STAGING.DBO.T_COMPROBANTES_SRI "
+            "WHERE CODIGO_COLABORADOR = ? "
         )
-        params: list = [limite]
+        params: list = [limite, codigo_colaborador]
         if ruc_filtro:
-            sql += "WHERE RUC_CONTRIBUYENTE = ? "
+            sql += "AND RUC_CONTRIBUYENTE = ? "
             params.append(ruc_filtro)
         sql += "ORDER BY FECHA_DESCARGA DESC"
 
-        with pyodbc.connect(conn_str, timeout=10) as conn:
+        with pyodbc.connect(settings.get_connection_string(), timeout=30) as conn:
             cursor = conn.cursor()
             cursor.execute(sql, *params)
             cols = [c[0] for c in cursor.description]
@@ -128,14 +125,7 @@ def _insertar_en_db(registro: RegistroSesion) -> None:
     try:
         import pyodbc
 
-        conn_str = (
-            f"DRIVER={{ODBC Driver 17 for SQL Server}};"
-            f"SERVER={settings.DB_HOST},{settings.DB_PORT};"
-            f"DATABASE={settings.DB_NAME};"
-            f"UID={settings.DB_USER};"
-            f"PWD={settings.DB_PASSWORD}"
-        )
-        with pyodbc.connect(conn_str, timeout=10) as conn:
+        with pyodbc.connect(settings.get_connection_string(), timeout=30) as conn:
             conn.cursor().execute(
                 _INSERT_SQL,
                 datetime.now(),

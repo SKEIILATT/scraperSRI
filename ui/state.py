@@ -13,6 +13,7 @@ class SesionUsuario:
     autenticado: bool = False
     codigo_colaborador: str = ""
     nombre_usuario: str = ""
+    nombre_completo_colaborador: str = ""
 
     # Credenciales SRI (solo en memoria, nunca se persisten)
     sri_ruc: str = ""

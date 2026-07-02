@@ -3,3 +3,5 @@ playwright>=1.44.0
 python-dotenv>=1.0.0
 pyodbc>=5.1.0
 keyring>=25.0.0
+openpyxl>=3.1.0
+plyer>=2.1.0

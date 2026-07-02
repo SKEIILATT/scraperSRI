@@ -57,6 +57,7 @@ def _sesion() -> dict:
             "autenticado": False,
             "codigo_colaborador": "",
             "nombre_usuario_banco": "",
+            "nombre_completo_colaborador": "",
             "sri_ruc": "",
             "sri_password": "",
             "anio": str(datetime.now().year),
@@ -182,18 +183,19 @@ async def pagina_login():
                 spinner.style("display:inline-block;")
                 btn_ingresar.disable()
                 try:
-                    valido, msg_bd = await asyncio.to_thread(validar_colaborador, codigo, usuario)
+                    valido, msg_bd, colaborador = await asyncio.to_thread(validar_colaborador, codigo, usuario)
                 finally:
                     spinner.style("display:none;")
                     btn_ingresar.enable()
 
-                if not valido:
+                if not valido or colaborador is None:
                     lbl_err_general.set_text(msg_bd or "Acceso no autorizado.")
                     return
 
                 s["autenticado"] = True
-                s["codigo_colaborador"] = codigo
-                s["nombre_usuario_banco"] = usuario
+                s["codigo_colaborador"] = colaborador.codigo
+                s["nombre_usuario_banco"] = colaborador.usuario
+                s["nombre_completo_colaborador"] = colaborador.nombre_completo
                 s["paso"] = 2
                 ui.navigate.to("/credenciales-sri")
 
@@ -701,7 +703,6 @@ async def pagina_resultado():
                         f"font-size:13px; color:{GRIS_OSCURO}; margin-top:12px; "
                         f"font-family:'Inter',sans-serif;"
                     )
-                    ui.element("div").append(lbl_cred)
 
             divider()
 
@@ -781,8 +782,18 @@ async def pagina_resultado():
                 s["errores_proceso"] = []
                 ui.navigate.to("/configuracion")
 
-            with ui.element("div").style("display:flex; gap:10px; margin-top:8px;"):
-                btn_primario("Nueva consulta", on_click=nueva_consulta)
+            def otro_ruc():
+                # Mantiene config (periodo, tipo) pero limpia credenciales SRI
+                s.pop("sri_ruc", None)
+                s.pop("sri_password", None)
+                s["paso"] = 2
+                s["proceso_finalizado"] = False
+                s["errores_proceso"] = []
+                ui.navigate.to("/credenciales-sri")
+
+            with ui.element("div").style("display:flex; gap:10px; margin-top:8px; flex-wrap:wrap;"):
+                btn_secundario("Nueva consulta", on_click=nueva_consulta)
+                btn_primario("Descargar otro RUC", on_click=otro_ruc)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -809,6 +820,13 @@ async def pagina_historial():
     from storage.db_logger import consultar_sesiones
 
     ui.add_head_html(CSS_GLOBAL)
+    s = _sesion()
+
+    if not s.get("autenticado"):
+        ui.navigate.to("/")
+        return
+
+    codigo_colaborador = s.get("codigo_colaborador", "")
 
     header()
 
@@ -822,7 +840,7 @@ async def pagina_historial():
             ui.label("Historial de consultas").style(
                 f"font-size:20px; font-weight:600; color:{GRIS_OSCURO}; display:block; margin-bottom:4px;"
             )
-            ui.label("Sesiones de descarga registradas en el sistema.").style(
+            ui.label("Tus sesiones de descarga registradas en el sistema.").style(
                 f"font-size:13px; color:{GRIS_MEDIO}; display:block; margin-bottom:20px;"
             )
 
@@ -838,22 +856,32 @@ async def pagina_historial():
                         "El historial estara disponible cuando se conecte SQL Server."
                     ).style(f"font-size:13px; color:{GRIS_OSCURO};")
 
-            # Filtro por RUC
+            # Filtro por RUC y acciones
             tabla_container = ui.element("div").style("width:100%;")
 
             with ui.element("div").style(
-                f"display:flex; gap:10px; align-items:flex-end; margin-bottom:16px;"
+                f"display:flex; gap:10px; align-items:flex-end; margin-bottom:16px; flex-wrap:wrap;"
             ):
                 ruc_input = ui.input(placeholder="Filtrar por RUC...").style(
                     "width:220px; font-size:13px;"
                 )
-                btn_primario("Buscar", on_click=lambda: _cargar_tabla(tabla_container, ruc_input.value, bypass_activo))
-                btn_secundario("Ver todos", on_click=lambda: _cargar_tabla(tabla_container, "", bypass_activo))
+                btn_primario("Buscar", on_click=lambda: _cargar_tabla(tabla_container, ruc_input.value, codigo_colaborador, bypass_activo))
+                btn_secundario("Ver todos", on_click=lambda: _cargar_tabla(tabla_container, "", codigo_colaborador, bypass_activo))
+
+                async def exportar_excel():
+                    filas = await asyncio.to_thread(consultar_sesiones, ruc_input.value.strip(), codigo_colaborador)
+                    if not filas:
+                        ui.notify("Sin datos para exportar.", type="warning")
+                        return
+                    contenido = await asyncio.to_thread(_generar_excel, filas)
+                    ui.download(contenido, "historial_sri.xlsx")
+
+                btn_secundario("Exportar Excel", on_click=exportar_excel)
 
             divider()
 
             # Carga inicial
-            await _cargar_tabla(tabla_container, "", bypass_activo)
+            await _cargar_tabla(tabla_container, "", codigo_colaborador, bypass_activo)
 
         with ui.element("div").style("margin-top:24px;"):
             ui.link("Volver al inicio", "/").style(
@@ -864,12 +892,12 @@ async def pagina_historial():
             )
 
 
-async def _cargar_tabla(contenedor, ruc_filtro: str, bypass: bool) -> None:
+async def _cargar_tabla(contenedor, ruc_filtro: str, codigo_colaborador: str, bypass: bool) -> None:
     from storage.db_logger import consultar_sesiones
 
     contenedor.clear()
     with contenedor:
-        filas = await asyncio.to_thread(consultar_sesiones, ruc_filtro)
+        filas = await asyncio.to_thread(consultar_sesiones, ruc_filtro, codigo_colaborador)
 
         if not filas:
             ui.label(
@@ -950,5 +978,173 @@ def _td(texto: str, align: str = "left", color: str = "") -> None:
     if color:
         estilo += f" color:{color}; font-weight:600;"
     ui.element("td").style(estilo).text = texto
+
+
+def _generar_excel(filas: list[dict]) -> bytes:
+    import io
+    import openpyxl
+    from openpyxl.styles import Font, PatternFill, Alignment
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Historial SRI"
+
+    headers = ["Fecha", "RUC", "Anio", "Mes", "Tipo", "Encontrados", "Descargados", "Errores", "Estado", "Colaborador", "Carpeta destino"]
+    header_font = Font(bold=True, color="FFFFFF")
+    header_fill = PatternFill("solid", fgColor="160F41")
+
+    for col_idx, h in enumerate(headers, start=1):
+        cell = ws.cell(row=1, column=col_idx, value=h)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = Alignment(horizontal="center")
+
+    for fila in filas:
+        fecha = fila.get("FECHA_DESCARGA")
+        fecha_str = fecha.strftime("%d/%m/%Y %H:%M") if hasattr(fecha, "strftime") else str(fecha or "")
+        mes_n = fila.get("PERIODO_MES", 0)
+        colaborador = f"{fila.get('CODIGO_COLABORADOR') or ''} {fila.get('USUARIO_COLABORADOR') or ''}".strip()
+        ws.append([
+            fecha_str,
+            fila.get("RUC_CONTRIBUYENTE", ""),
+            fila.get("PERIODO_ANIO", ""),
+            MESES_NOMBRE.get(mes_n, mes_n),
+            fila.get("TIPO_COMPROBANTE_DESC", ""),
+            fila.get("TOTAL_ENCONTRADOS", 0),
+            fila.get("TOTAL_DESCARGADOS", 0),
+            fila.get("TOTAL_ERRORES", 0),
+            fila.get("ESTADO", ""),
+            colaborador or "-",
+            fila.get("CARPETA_DESTINO", ""),
+        ])
+
+    # Ancho automatico de columnas
+    for col in ws.columns:
+        max_len = max((len(str(c.value or "")) for c in col), default=0)
+        ws.column_dimensions[col[0].column_letter].width = min(max_len + 4, 50)
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Archivos descargados
+# ─────────────────────────────────────────────────────────────────────────────
+
+@ui.page("/archivos")
+async def pagina_archivos():
+    import os
+    from config import settings as cfg
+    from storage.db_logger import consultar_sesiones
+
+    ui.add_head_html(CSS_GLOBAL)
+    s = _sesion()
+
+    if not s.get("autenticado"):
+        ui.navigate.to("/")
+        return
+
+    codigo_colaborador = s.get("codigo_colaborador", "")
+
+    header()
+
+    with centrar_contenido():
+        with ui.element("div").style(
+            f"background:{BLANCO}; border:1px solid {BORDER_COLOR}; border-radius:14px; "
+            f"padding:32px 40px; width:100%; max-width:1100px; "
+            f"box-shadow:0 4px 24px rgba(22,15,65,0.08);"
+        ):
+            ui.label("Archivos descargados").style(
+                f"font-size:20px; font-weight:600; color:{GRIS_OSCURO}; display:block; margin-bottom:4px;"
+            )
+            ui.label("Tus comprobantes almacenados en el servidor.").style(
+                f"font-size:13px; color:{GRIS_MEDIO}; display:block; margin-bottom:20px;"
+            )
+            divider()
+
+            base = Path(cfg.DOWNLOADS_BASE_DIR)
+            sesiones = await asyncio.to_thread(consultar_sesiones, "", codigo_colaborador, 1000)
+            carpetas_propias = {
+                Path(f["CARPETA_DESTINO"]).name
+                for f in sesiones
+                if f.get("CARPETA_DESTINO")
+            }
+
+            if cfg.AUTH_BYPASS_MODE:
+                with ui.element("div").style(
+                    f"background:#FFF3CD; border-left:3px solid #856404; "
+                    f"padding:10px 14px; border-radius:3px; margin-bottom:16px;"
+                ):
+                    ui.label(
+                        "BASE DE DATOS NO CONECTADA — AUTH_BYPASS_MODE activo. "
+                        "No es posible identificar tus archivos propios sin BD."
+                    ).style(f"font-size:13px; color:{GRIS_OSCURO};")
+
+            if not base.exists() or not carpetas_propias:
+                ui.label("No hay archivos descargados aun.").style(
+                    f"font-size:13px; color:{GRIS_MEDIO};"
+                )
+            else:
+                carpetas = sorted(
+                    [d for d in base.iterdir() if d.is_dir() and d.name in carpetas_propias],
+                    key=lambda d: d.name,
+                    reverse=True,
+                )
+                if not carpetas:
+                    ui.label("No hay archivos descargados aun.").style(
+                        f"font-size:13px; color:{GRIS_MEDIO};"
+                    )
+                else:
+                    for carpeta in carpetas:
+                        archivos = [f for f in carpeta.iterdir() if f.is_file()]
+                        xml_count = sum(1 for f in archivos if f.suffix.lower() == ".xml")
+                        pdf_count = sum(1 for f in archivos if f.suffix.lower() == ".pdf")
+                        otros = len(archivos) - xml_count - pdf_count
+
+                        with ui.element("div").style(
+                            f"display:flex; align-items:center; justify-content:space-between; "
+                            f"padding:14px 18px; border-radius:10px; margin-bottom:10px; "
+                            f"border:1px solid {BORDER_COLOR}; background:{FONDO}; flex-wrap:wrap; gap:10px;"
+                        ):
+                            with ui.element("div"):
+                                ui.label(carpeta.name).style(
+                                    f"font-size:15px; font-weight:600; color:{GRIS_OSCURO}; "
+                                    f"display:block; font-family:'Inter',sans-serif;"
+                                )
+                                resumen = []
+                                if xml_count:
+                                    resumen.append(f"{xml_count} XML")
+                                if pdf_count:
+                                    resumen.append(f"{pdf_count} PDF")
+                                if otros:
+                                    resumen.append(f"{otros} otros")
+                                ui.label(", ".join(resumen) if resumen else "Sin archivos").style(
+                                    f"font-size:13px; color:{GRIS_MEDIO}; font-family:'Inter',sans-serif;"
+                                )
+
+                            def _abrir(ruta=str(carpeta)):
+                                try:
+                                    if os.name == "nt":
+                                        os.startfile(ruta)
+                                    else:
+                                        import subprocess
+                                        subprocess.Popen(["xdg-open", ruta])
+                                except Exception:
+                                    pass
+
+                            btn_secundario("Abrir carpeta", on_click=_abrir)
+
+                    ui.label(f"{len(carpetas)} periodo{'s' if len(carpetas) != 1 else ''} almacenado{'s' if len(carpetas) != 1 else ''}.").style(
+                        f"font-size:12px; color:{GRIS_MEDIO}; margin-top:16px; display:block;"
+                    )
+
+        with ui.element("div").style("margin-top:24px;"):
+            ui.link("Volver al inicio", "/").style(
+                f"display:inline-block; font-size:13px; font-weight:600; "
+                f"color:{GRIS_OSCURO}; font-family:'Inter',sans-serif; "
+                f"text-decoration:none; padding:9px 20px; border-radius:8px; "
+                f"border:1.5px solid {BORDER_COLOR}; background:{BLANCO};"
+            )
 
 
