@@ -25,7 +25,7 @@ URL_PERFIL = "/sri-en-linea/contribuyente/perfil"   # link de "Iniciar sesion" e
 TIMEOUT_NAVEGACION = 30_000   # ms
 TIMEOUT_ELEMENTO = 15_000     # ms
 TIMEOUT_POST_SUBMIT = 25_000  # ms para que validarUsuario()+reCAPTCHA+submit completen
-MAX_INTENTOS_RECAPTCHA = 3    # reintentos antes de escalar a intervencion manual
+MAX_INTENTOS = 3              # reintentos del flujo humanizado antes de escalar
 
 
 class ErrorCredenciales(Exception):
@@ -48,40 +48,40 @@ async def login_sri(
     on_reintento: "Callable[[int, int], Awaitable[None]] | None" = None,
 ) -> None:
     """
-    Autentica en el portal SRI con hasta MAX_INTENTOS_RECAPTCHA reintentos automaticos.
+    Autentica en el portal SRI, con hasta MAX_INTENTOS reintentos automaticos
+    del flujo humanizado completo (no de resolver el captcha — reintentar es
+    simplemente volver a intentar la sesion desde cero).
 
-    Estrategia de reintento:
-      - Si reCAPTCHA no habilita el boton en TIMEOUT_RECAPTCHA ms, recarga la pagina
-        y reintenta. La pausa entre reintentos crece (3s, 6s, 10s) para dar mas
-        tiempo al sistema de acumular senales de confianza del perfil.
-      - Solo lanza ErrorRecaptcha (intervencion manual) si los 3 intentos fallan.
-      - Si las credenciales son incorrectas, lanza ErrorCredenciales inmediatamente
-        sin reintentar (no tiene sentido reintentar con credenciales malas).
+    El reCAPTCHA del SRI es invisible/score-based: nunca presenta un desafio
+    visual que un humano pueda resolver, asi que "intervencion manual" no es
+    una opcion real aqui. Lo unico que puede ayudar es reintentar (Google
+    reevalua la sesion cada vez) con pausas crecientes entre intentos. Solo
+    tras agotar los reintentos se levanta ErrorRecaptcha, para que el llamador
+    decida si termina el proceso o deja una ultima oportunidad de revision manual.
 
     Args:
-        on_reintento: callback opcional llamado al inicio de cada intento con
-                      (intento_actual, total_intentos) para actualizar la UI.
+        on_reintento: callback opcional invocado al iniciar cada intento con
+                      (intento_actual, total_intentos), para que la UI muestre el estado.
 
     Raises:
-        ErrorCredenciales: si el SRI rechaza usuario/password.
-        ErrorRecaptcha: si los 3 intentos automaticos fallan (requiere intervencion manual).
+        ErrorCredenciales: si el SRI rechaza usuario/password (no se reintenta).
+        ErrorRecaptcha: si se agotaron los intentos y el login sigue bloqueado.
         ErrorLoginTimeout: si la pagina no responde en tiempo.
     """
-    logger.info("Iniciando login SRI para RUC: %s (max %d intentos)", ruc, MAX_INTENTOS_RECAPTCHA)
+    logger.info("Iniciando login SRI para RUC: %s (max %d intentos)", ruc, MAX_INTENTOS)
 
-    for intento in range(1, MAX_INTENTOS_RECAPTCHA + 1):
-        logger.info("Login SRI - intento %d/%d", intento, MAX_INTENTOS_RECAPTCHA)
+    for intento in range(1, MAX_INTENTOS + 1):
+        logger.info("Login SRI - intento %d/%d", intento, MAX_INTENTOS)
         if on_reintento:
             try:
-                await on_reintento(intento, MAX_INTENTOS_RECAPTCHA)
+                await on_reintento(intento, MAX_INTENTOS)
             except Exception:
                 pass
 
         # --- Paso 1: Ir a la pagina de inicio del SRI ---
         await page.goto(URL_INICIO, wait_until="domcontentloaded", timeout=TIMEOUT_NAVEGACION)
-        # Pausa creciente entre reintentos para acumular senales de confianza en el perfil
-        pausa_inicial = 800 + (intento - 1) * 2500
-        await asyncio.sleep(pausa_inicial / 1000)
+        # Pausa creciente entre intentos para no repetir el mismo patron de timing
+        await asyncio.sleep((800 + (intento - 1) * 2500) / 1000)
 
         # --- Paso 2: Hacer click en "Iniciar sesion" del menu ---
         try:
@@ -155,28 +155,30 @@ async def login_sri(
                     logger.warning("Error de credenciales SRI: %s", texto)
                     raise ErrorCredenciales(f"Credenciales incorrectas: {texto}")
 
-        # Si seguimos en el formulario sin error explicito = reCAPTCHA bloqueo el submit
-        url_actual = page.url
-        if "usuario" in await page.content() and "kc-login" in await page.content():
+        # --- Formulario bloqueado sin navegar (probable rechazo silencioso de reCAPTCHA) ---
+        # No se usa deteccion de widget aqui: el badge de reCAPTCHA esta presente
+        # en la pagina siempre (login exitoso o no), asi que no sirve para distinguir
+        # un bloqueo real. La unica senal disponible es que el formulario nunca navego.
+        contenido = await page.content()
+        formulario_sin_navegar = "usuario" in contenido and "kc-login" in contenido
+
+        if formulario_sin_navegar:
             logger.warning(
-                "Formulario sin navegar tras %dms en intento %d/%d — posible bloqueo reCAPTCHA (URL: %s)",
-                TIMEOUT_POST_SUBMIT, intento, MAX_INTENTOS_RECAPTCHA, url_actual,
+                "Formulario sin navegar tras %dms en intento %d/%d — probable rechazo "
+                "de reCAPTCHA (URL: %s)",
+                TIMEOUT_POST_SUBMIT, intento, MAX_INTENTOS, page.url,
             )
-            if intento < MAX_INTENTOS_RECAPTCHA:
-                logger.info("Reintentando en %ds...", intento * 3)
-                await asyncio.sleep(intento * 3)
+            if intento < MAX_INTENTOS:
                 continue
-            else:
-                raise ErrorRecaptcha(
-                    f"reCAPTCHA bloqueo el login en {MAX_INTENTOS_RECAPTCHA} intentos automaticos. "
-                    "Se requiere verificacion manual."
-                )
+            raise ErrorRecaptcha(
+                f"El SRI no completo el login tras {MAX_INTENTOS} intentos "
+                "(posible verificacion reCAPTCHA fallida)."
+            )
 
         # Sin redireccion, sin error y sin formulario visible: estado desconocido
-        if intento < MAX_INTENTOS_RECAPTCHA:
-            await asyncio.sleep(intento * 3)
-        else:
-            raise ErrorLoginTimeout(
-                "El login del SRI no completo tras varios intentos. "
-                "Verifique las credenciales e intente de nuevo."
-            )
+        if intento < MAX_INTENTOS:
+            continue
+        raise ErrorLoginTimeout(
+            "El login del SRI no completo tras varios intentos. "
+            "Verifique las credenciales e intente de nuevo."
+        )

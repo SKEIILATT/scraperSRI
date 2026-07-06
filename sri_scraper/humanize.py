@@ -60,8 +60,17 @@ async def _mover_bezier(
             await asyncio.sleep(random.uniform(delay_ms_min, delay_ms_max) / 1000)
 
 
-async def mover_y_click(page: Page, selector: str) -> None:
-    """Mueve el mouse hacia el elemento con curva Bezier antes de hacer click."""
+async def mover_y_click(page: Page, selector: str, rapido: bool = False) -> None:
+    """
+    Mueve el mouse hacia el elemento con curva Bezier antes de hacer click.
+
+    `rapido=True` acorta la curva y las pausas: solo debe usarse para clicks que
+    NO son evaluados por reCAPTCHA Enterprise (ej. descargar XML/PDF por fila,
+    que ocurren dentro de una sesion ya autenticada y con score ya establecido).
+    Los submits de login y de aplicar_filtros deben seguir usando el modo
+    humanizado completo (rapido=False, el default) porque esos SI son los
+    formularios que reCAPTCHA puntua.
+    """
     elemento = page.locator(selector)
     await elemento.scroll_into_view_if_needed()
     box = await elemento.bounding_box()
@@ -69,13 +78,21 @@ async def mover_y_click(page: Page, selector: str) -> None:
         pos_actual = await page.evaluate("() => ({ x: window._mouseX || 100, y: window._mouseY || 100 })")
         x1 = box["x"] + random.uniform(box["width"] * 0.25, box["width"] * 0.75)
         y1 = box["y"] + random.uniform(box["height"] * 0.25, box["height"] * 0.75)
+        if rapido:
+            pasos = random.randint(8, 14)
+            delay_min, delay_max = 4, 10
+        else:
+            pasos = random.randint(25, 45)
+            delay_min, delay_max = 8, 22
         await _mover_bezier(
             page,
             pos_actual.get("x", 100), pos_actual.get("y", 100),
             x1, y1,
-            pasos=random.randint(25, 45),
+            pasos=pasos,
+            delay_ms_min=delay_min,
+            delay_ms_max=delay_max,
         )
-        await pausa(80, 220)
+        await pausa(20, 60) if rapido else await pausa(80, 220)
     await elemento.click()
 
 

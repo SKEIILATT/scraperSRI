@@ -11,6 +11,7 @@ downloads/
 
 # Perfil persistente del navegador (cookies, cache de Google)
 browser_profile/
+browser_profile_backup*/
 
 # Python
 __pycache__/

@@ -88,12 +88,22 @@ class BrowserManager:
 
         launch_kwargs = dict(
             headless=settings.BROWSER_HEADLESS,
+            # OJO: no incluir "--disable-blink-features=AutomationControlled" aqui.
+            # Ese flag dispara el banner de Chrome/Edge "marca de linea de comandos
+            # no admitida" (bad_flags_prompt), que es en si mismo una senal de
+            # automatizacion visible/detectable. Se probo quitarlo para descartarlo
+            # como causa de baja confianza en reCAPTCHA Enterprise.
             args=[
-                "--disable-blink-features=AutomationControlled",
                 "--no-first-run",
                 "--no-default-browser-check",
             ],
-            viewport={"width": 1366, "height": 768},
+            # no_viewport=True: NO forzar un viewport CDP fijo. Con un viewport fijo,
+            # window.innerWidth/innerHeight quedan recortados por Playwright mientras
+            # que window.outerWidth/outerHeight (tamano real de la ventana del SO)
+            # no coinciden — esa discrepancia es una senal de automatizacion que un
+            # navegador manual nunca tiene (ahi la ventana real y el viewport siempre
+            # coinciden). Dejamos que la pagina use el tamano real de la ventana.
+            no_viewport=True,
             locale="es-EC",
             timezone_id="America/Guayaquil",
         )

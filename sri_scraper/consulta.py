@@ -8,6 +8,7 @@ El formulario usa JSF/PrimeFaces con ViewState. Los submits son postbacks AJAX.
 """
 
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Callable, Awaitable
 
@@ -36,6 +37,17 @@ URL_COMPROBANTES = (
 
 TIMEOUT_AJAX = 30_000
 TIMEOUT_TABLA = 40_000
+
+def _frm(sufijo: str) -> str:
+    """
+    Selector tolerante a cambios de id: el SRI renombra periodicamente los ids
+    de sus componentes JSF (ya paso con el boton Consultar: btnBuscar -> btnConsultarSinRe).
+    En vez de anclar al id completo, se ancla solo al sufijo estable del campo/componente
+    usando el selector de atributo `$=` (termina con), que actua como un "regex" laxo
+    y sobrevive a que el SRI agregue prefijos o renombre el contenedor.
+    """
+    return f'[id$="{sufijo}"]'
+
 
 TIPOS_COMPROBANTE = {
     "1": "Factura",
@@ -81,7 +93,7 @@ async def _tomar_screenshot_debug(page: Page, nombre: str) -> None:
 
 async def _esperar_formulario(page: Page) -> bool:
     """Espera que el formulario JSF de comprobantes este visible. Retorna True si lo encontro."""
-    for sel in ("#frmPrincipal\\:ano", "form[id='frmPrincipal']", "#frmPrincipal"):
+    for sel in (_frm(":ano"), "form[id='frmPrincipal']", "#frmPrincipal"):
         try:
             await page.wait_for_selector(sel, timeout=20_000)
             logger.info("Formulario de comprobantes detectado con: %s", sel)
@@ -93,7 +105,17 @@ async def _esperar_formulario(page: Page) -> bool:
 
 
 async def _verificar_error_captcha(page: Page) -> None:
-    """Detecta mensajes de error CAPTCHA en el formulario JSF. Lanza ErrorCaptchaConsulta si existe."""
+    """Detecta si el SERVIDOR rechazo la consulta por verificacion CAPTCHA
+    (mensaje de error explicito en el formulario JSF). Lanza ErrorCaptchaConsulta
+    si existe.
+
+    OJO: no se usa hay_recaptcha() (presencia del badge/widget) como senal aqui.
+    El badge de reCAPTCHA esta presente en la pagina SIEMPRE (es un requisito de
+    Google, se muestra en toda carga de pagina, haya fallado la consulta o no).
+    Usarlo como disparador aqui causaba un falso positivo en el 100% de los
+    intentos, exitosos o no. La unica senal confiable de bloqueo real es que
+    el propio servidor del SRI devuelva un mensaje de error mencionando "captcha".
+    """
     selectors = [
         ".ui-messages-warn",
         ".ui-messages-error",
@@ -117,6 +139,34 @@ async def _verificar_error_captcha(page: Page) -> None:
             raise
         except Exception:
             pass
+
+
+async def _texto_mensajes_servidor(page: Page) -> str:
+    """
+    Recolecta el texto de cualquier mensaje JSF (.ui-messages-*) visible en la
+    pagina. Se usa para incluir el mensaje real del SRI en los errores en vez
+    de un texto generico — asi un mensaje nuevo/desconocido queda visible en el
+    log inmediatamente, sin tener que reproducir el caso para verlo.
+    """
+    selectors = [
+        ".ui-messages-warn",
+        ".ui-messages-error",
+        ".ui-messages-info",
+        ".ui-growl-item-container",
+        ".ui-messages",
+    ]
+    textos: list[str] = []
+    for sel in selectors:
+        try:
+            elementos = page.locator(sel)
+            count = await elementos.count()
+            for i in range(count):
+                texto = (await elementos.nth(i).inner_text()).strip()
+                if texto:
+                    textos.append(texto)
+        except Exception:
+            pass
+    return " | ".join(dict.fromkeys(textos))
 
 
 async def _login_tuportal(page: Page, ruc: str, password: str) -> bool:
@@ -162,7 +212,12 @@ async def _login_tuportal(page: Page, ruc: str, password: str) -> bool:
             pass
         return True
     except PlaywrightTimeout:
-        logger.warning("Login tuportal no navego en 25s — posible bloqueo reCAPTCHA")
+        # No navego. No usamos hay_recaptcha() aqui: el badge de reCAPTCHA esta
+        # presente en la pagina siempre, exitosa o no, asi que no distingue nada.
+        # Se deja que el llamador (navegar_a_comprobantes) reintente el flujo
+        # humanizado — no es "resolver" el captcha, solo darle mas oportunidades
+        # a una sesion genuina.
+        logger.warning("Login tuportal no navego en 25s")
         return False
 
 
@@ -294,12 +349,25 @@ async def navegar_a_comprobantes(
     )
 
 
+# El id del boton "Consultar" ha cambiado antes (SRI actualiza el HTML periodicamente),
+# por eso se ubica por texto visible dentro del form en vez de un id fijo.
+_SELECTOR_BTN_CONSULTAR = '#frmPrincipal button:has-text("Consultar")'
+
+# Mensaje que el SRI muestra cuando la consulta es valida pero no hay comprobantes
+# para esos parametros (no es un error, es un resultado de 0 filas legitimo).
+_SELECTOR_SIN_DATOS = '.ui-messages-warn:has-text("No existen datos")'
+
+_SELECTOR_ANO = _frm(":ano")
+_SELECTOR_MES = _frm(":mes")
+_SELECTOR_DIA = _frm(":dia")
+_SELECTOR_TIPO_COMPROBANTE = _frm(":cmbTipoComprobante")
+
 _CAMPOS_FORMULARIO = [
-    "#frmPrincipal\\:ano",
-    "#frmPrincipal\\:mes",
-    "#frmPrincipal\\:dia",
-    "#frmPrincipal\\:cmbTipoComprobante",
-    "#frmPrincipal\\:btnBuscar",
+    _SELECTOR_ANO,
+    _SELECTOR_MES,
+    _SELECTOR_DIA,
+    _SELECTOR_TIPO_COMPROBANTE,
+    _SELECTOR_BTN_CONSULTAR,
 ]
 
 
@@ -324,19 +392,19 @@ async def aplicar_filtros(
     await simular_lectura_formulario(page, _CAMPOS_FORMULARIO)
 
     # Fase 3: seleccionar filtros con pausas largas (humano que piensa entre selecciones)
-    await seleccionar_opcion(page, "#frmPrincipal\\:ano", anio)
+    await seleccionar_opcion(page, _SELECTOR_ANO, anio)
     await pausa(2000, 4000)
-    await seleccionar_opcion(page, "#frmPrincipal\\:mes", mes)
+    await seleccionar_opcion(page, _SELECTOR_MES, mes)
     await pausa(2000, 4000)
-    await seleccionar_opcion(page, "#frmPrincipal\\:dia", dia)
+    await seleccionar_opcion(page, _SELECTOR_DIA, dia)
     await pausa(2000, 3500)
-    await seleccionar_opcion(page, "#frmPrincipal\\:cmbTipoComprobante", tipo_comprobante)
+    await seleccionar_opcion(page, _SELECTOR_TIPO_COMPROBANTE, tipo_comprobante)
 
     # Fase 4: pausa larga post-seleccion — como si el usuario revisara antes de enviar
     await pausa(3000, 6000)
 
     # Fase 5: acercarse lentamente al boton Consultar (movimiento deliberado)
-    await acercarse_lento(page, "#frmPrincipal\\:btnBuscar")
+    await acercarse_lento(page, _SELECTOR_BTN_CONSULTAR)
 
     # Fase 6: click en Consultar
     try:
@@ -344,7 +412,7 @@ async def aplicar_filtros(
             lambda r: "comprobantesRecibidos" in r.url and r.request.method == "POST",
             timeout=TIMEOUT_AJAX,
         ):
-            await mover_y_click(page, "#frmPrincipal\\:btnBuscar")
+            await mover_y_click(page, _SELECTOR_BTN_CONSULTAR)
     except PlaywrightTimeout:
         pass  # Sin respuesta AJAX — captcha puede haber bloqueado el submit
 
@@ -364,13 +432,23 @@ async def esperar_tabla(page: Page) -> None:
     """
     try:
         await page.wait_for_selector(
-            "#frmPrincipal\\:tablaCompRecibidos_data tr, "
-            ".ui-datatable-empty-message",
+            f"{_frm(':tablaCompRecibidos_data')} tr, "
+            ".ui-datatable-empty-message, "
+            f"{_SELECTOR_SIN_DATOS}",
             timeout=TIMEOUT_TABLA,
         )
     except PlaywrightTimeout:
         await _verificar_error_captcha(page)
-        raise RuntimeError("La tabla de resultados no cargo despues de aplicar los filtros.")
+        await _tomar_screenshot_debug(page, "debug_tabla_no_cargo.png")
+        try:
+            html = await page.content()
+            with open("debug_tabla_no_cargo.html", "w", encoding="utf-8") as f:
+                f.write(html)
+        except Exception:
+            pass
+        mensaje_servidor = await _texto_mensajes_servidor(page)
+        detalle = f" Mensaje del servidor: {mensaje_servidor}" if mensaje_servidor else ""
+        raise RuntimeError(f"La tabla de resultados no cargo despues de aplicar los filtros.{detalle}")
 
     await pausa(500, 1000)
 
@@ -378,7 +456,7 @@ async def esperar_tabla(page: Page) -> None:
 async def obtener_filas_pagina(page: Page, tipo_comprobante: str) -> list[FilaComprobante]:
     """Extrae todas las filas visibles de la tabla en la pagina actual."""
     filas = []
-    rows = page.locator("#frmPrincipal\\:tablaCompRecibidos_data tr")
+    rows = page.locator(f"{_frm(':tablaCompRecibidos_data')} tr")
     total = await rows.count()
 
     for i in range(total):
@@ -412,26 +490,116 @@ async def obtener_filas_pagina(page: Page, tipo_comprobante: str) -> list[FilaCo
     return filas
 
 
+async def _pagina_actual(page: Page) -> int:
+    """Lee el numero de pagina actual del texto "(X of Y)" del paginador."""
+    try:
+        actual = page.locator(".ui-paginator-current")
+        if await actual.count() == 0:
+            return 1
+        texto = (await actual.first.inner_text()).strip()
+        m = re.search(r"(\d+)\s+of\s+\d+", texto, re.IGNORECASE)
+        if m:
+            return int(m.group(1))
+    except Exception:
+        pass
+    return 1
+
+
 async def total_paginas(page: Page) -> int:
-    """Detecta cuantas paginas tiene el paginador de la tabla."""
-    paginador = page.locator(".ui-paginator-pages .ui-paginator-page")
-    count = await paginador.count()
-    if count == 0:
-        return 1
-    return count
+    """
+    Detecta cuantas paginas tiene el paginador de la tabla, leyendo el texto
+    "(X of Y)" del elemento .ui-paginator-current.
+
+    OJO: este paginador NO usa links numerados por pagina (".ui-paginator-page"
+    no existe aqui) — solo iconos primera/anterior/siguiente/ultima mas ese
+    texto. Contar ".ui-paginator-page" siempre da 0 y hacia que el scraper
+    creyera que solo habia 1 pagina sin importar cuantos resultados reales
+    hubiera (con 50 filas por pagina por defecto, esto se perdia todo lo que
+    excediera la primera pagina de forma silenciosa).
+    """
+    try:
+        actual = page.locator(".ui-paginator-current")
+        if await actual.count() == 0:
+            return 1
+        texto = (await actual.first.inner_text()).strip()
+        m = re.search(r"of\s+(\d+)", texto, re.IGNORECASE)
+        if m:
+            return int(m.group(1))
+    except Exception:
+        pass
+    return 1
 
 
-async def ir_a_pagina(page: Page, numero: int) -> None:
-    """Navega a una pagina especifica del paginador de la tabla."""
-    paginas = page.locator(".ui-paginator-pages .ui-paginator-page")
-    total = await paginas.count()
-    if numero <= total:
+async def _click_flecha_paginador(page: Page, selector: str) -> bool:
+    """
+    Click en una flecha del paginador (primera/anterior/siguiente/ultima), si
+    no esta deshabilitada. Retorna True si hizo click y la respuesta AJAX llego
+    a tiempo. Si la respuesta no llega, NO propaga la excepcion — solo retorna
+    False, para que un problema puntual al paginar no tumbe todo el proceso
+    (antes esto subia como excepcion no controlada hasta el orquestador y
+    marcaba TODA la corrida como "Error inesperado", no solo esta pagina).
+    """
+    boton = page.locator(selector)
+    if await boton.count() == 0:
+        return False
+    clases = await boton.first.get_attribute("class") or ""
+    if "ui-state-disabled" in clases:
+        return False
+    try:
         async with page.expect_response(
             lambda r: "comprobantesRecibidos" in r.url and r.request.method == "POST",
             timeout=TIMEOUT_AJAX,
         ):
-            await paginas.nth(numero - 1).click()
-        await pausa(800, 1500)
+            await boton.first.click()
+    except PlaywrightTimeout:
+        logger.warning("Timeout esperando respuesta AJAX del paginador (%s)", selector)
+        return False
+    await pausa(600, 1200)
+    return True
+
+
+async def ir_a_pagina(page: Page, numero: int) -> None:
+    """
+    Navega a la pagina `numero` del paginador.
+
+    Este paginador no permite salto directo por numero de pagina (no hay links
+    "1", "2", "3"): solo flechas de primera/anterior/siguiente/ultima. Para
+    llegar a `numero` se resetea a la primera pagina si hace falta retroceder,
+    y luego se hace click en "siguiente" las veces necesarias.
+
+    Despues de cada click se relee el numero de pagina real del DOM (no se
+    asume que avanzo solo porque la respuesta AJAX llego) — si el paginador
+    no avanza pese al click, se registra advertencia y se detiene en la
+    pagina donde quedo, en vez de quedar en un loop o desincronizarse con el
+    contador interno.
+    """
+    actual = await _pagina_actual(page)
+    if actual == numero:
+        return
+
+    if numero < actual:
+        if not await _click_flecha_paginador(page, ".ui-paginator-first"):
+            logger.warning("No se pudo volver a la primera pagina del paginador.")
+            return
+        actual = await _pagina_actual(page)
+
+    intentos_restantes = max(numero - actual, 0) + 2  # pequeno margen de seguridad
+    while actual < numero and intentos_restantes > 0:
+        if not await _click_flecha_paginador(page, ".ui-paginator-next"):
+            logger.warning(
+                "No se pudo avanzar de la pagina %d a la %d (paginador no respondio).",
+                actual, numero,
+            )
+            break
+        nueva_actual = await _pagina_actual(page)
+        if nueva_actual <= actual:
+            logger.warning(
+                "El paginador no avanzo tras click en 'siguiente' (seguia en pagina %d).",
+                actual,
+            )
+            break
+        actual = nueva_actual
+        intentos_restantes -= 1
 
 
 async def descargar_reporte(page: Page, ruta_destino: str) -> bool:
@@ -441,7 +609,7 @@ async def descargar_reporte(page: Page, ruta_destino: str) -> bool:
     """
     try:
         async with page.expect_download(timeout=30_000) as dl_info:
-            await mover_y_click(page, "#frmPrincipal\\:lnkTxtlistado")
+            await mover_y_click(page, _frm(":lnkTxtlistado"), rapido=True)
         descarga = await dl_info.value
         await descarga.save_as(ruta_destino)
         logger.info("Reporte descargado: %s", ruta_destino)
@@ -453,13 +621,13 @@ async def descargar_reporte(page: Page, ruta_destino: str) -> bool:
 
 async def descargar_xml(page: Page, indice: int, ruta_destino: str) -> bool:
     """Descarga el XML de la fila en el indice dado."""
-    selector = f"#frmPrincipal\\:tablaCompRecibidos\\:{indice}\\:lnkXml"
+    selector = _frm(f":{indice}:lnkXml")
     return await _descargar_doc(page, selector, ruta_destino, "XML")
 
 
 async def descargar_pdf(page: Page, indice: int, ruta_destino: str) -> bool:
     """Descarga el PDF/RIDE de la fila en el indice dado."""
-    selector = f"#frmPrincipal\\:tablaCompRecibidos\\:{indice}\\:lnkPdf"
+    selector = _frm(f":{indice}:lnkPdf")
     return await _descargar_doc(page, selector, ruta_destino, "PDF")
 
 
@@ -467,7 +635,7 @@ async def _descargar_doc(page: Page, selector: str, ruta_destino: str, tipo: str
     for intento in range(1, 4):
         try:
             async with page.expect_download(timeout=30_000) as dl_info:
-                await mover_y_click(page, selector)
+                await mover_y_click(page, selector, rapido=True)
             descarga = await dl_info.value
             await descarga.save_as(ruta_destino)
             logger.debug("%s descargado: %s", tipo, ruta_destino)

@@ -78,7 +78,7 @@ def _consultar_rucs_activos(periodos: list[tuple[int, int]]) -> list[dict]:
         sql = (
             "SELECT DISTINCT RUC_CONTRIBUYENTE, PERIODO_ANIO, PERIODO_MES, "
             "TIPO_COMPROBANTE_COD "
-            "FROM STAGING.DBO.T_COMPROBANTES_SRI "
+            "FROM PROCESOS_BI.DBO.T_COMPROBANTES_SRI "
             f"WHERE (PERIODO_ANIO, PERIODO_MES) IN ({placeholders}) "
             "AND ESTADO NOT IN ('ERROR') "
             "ORDER BY RUC_CONTRIBUYENTE, PERIODO_ANIO DESC, PERIODO_MES DESC"
@@ -113,7 +113,7 @@ async def _sincronizar_uno(ruc: str, anio: int, mes: int, tipo: str) -> None:
         anio=anio,
         mes=mes,
         dia=0,
-        tipo_comprobante=tipo,
+        tipos_comprobante=[tipo],
     )
 
     nuevos = 0

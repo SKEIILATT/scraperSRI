@@ -1,7 +1,8 @@
 """
 Registro de sesiones de descarga en T_COMPROBANTES_SRI.
 
-Tabla asumida en STAGING.DBO (misma BD que DW_DIM_COLABORADORES):
+Tabla asumida en PROCESOS_BI.DBO (base de datos de la aplicacion; distinta de
+STAGING.DBO donde vive DW_DIM_COLABORADORES):
 
   T_COMPROBANTES_SRI (
       ID                    INT           IDENTITY(1,1) PRIMARY KEY,
@@ -30,7 +31,7 @@ from config import settings
 logger = logging.getLogger(__name__)
 
 _INSERT_SQL = """
-INSERT INTO STAGING.DBO.T_COMPROBANTES_SRI (
+INSERT INTO PROCESOS_BI.DBO.T_COMPROBANTES_SRI (
     FECHA_DESCARGA, RUC_CONTRIBUYENTE, PERIODO_ANIO, PERIODO_MES,
     TIPO_COMPROBANTE_COD, TIPO_COMPROBANTE_DESC,
     TOTAL_ENCONTRADOS, TOTAL_DESCARGADOS, TOTAL_ERRORES,
@@ -101,7 +102,7 @@ def _consultar_db(ruc_filtro: str, codigo_colaborador: str, limite: int) -> list
             "SELECT TOP (?) ID, FECHA_DESCARGA, RUC_CONTRIBUYENTE, PERIODO_ANIO, PERIODO_MES, "
             "TIPO_COMPROBANTE_DESC, TOTAL_ENCONTRADOS, TOTAL_DESCARGADOS, TOTAL_ERRORES, "
             "ESTADO, CARPETA_DESTINO, CODIGO_COLABORADOR, USUARIO_COLABORADOR "
-            "FROM STAGING.DBO.T_COMPROBANTES_SRI "
+            "FROM PROCESOS_BI.DBO.T_COMPROBANTES_SRI "
             "WHERE CODIGO_COLABORADOR = ? "
         )
         params: list = [limite, codigo_colaborador]

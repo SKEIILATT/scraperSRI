@@ -22,7 +22,7 @@ from ui.components import (
 from ui.styles import (
     CSS_GLOBAL, MAGENTA, BLANCO, BORDER_COLOR, FONDO,
     NAVY as GRIS_OSCURO, NAVY_MED as GRIS_MEDIO, FONDO as GRIS_CLARO,
-    ERROR_COLOR, SUCCESS_COLOR,
+    NAVY_LIGHT, ERROR_COLOR, SUCCESS_COLOR,
 )
 
 logger = logging.getLogger(__name__)
@@ -64,6 +64,7 @@ def _sesion() -> dict:
             "mes": str(datetime.now().month),
             "dia": "0",
             "tipo_comprobante": "1",
+            "tipos_comprobante": ["1"],
             "proceso_activo": False,
             "fase_proceso": "",
             "total_comprobantes": 0,
@@ -143,7 +144,7 @@ async def pagina_login():
 
             _label_campo("Codigo de trabajador")
             codigo_input = (
-                ui.input(placeholder="Ej: 23412")
+                ui.input(placeholder="Ej: 10000")
                 .props("outlined dense")
                 .style("width:100%;")
             )
@@ -152,7 +153,7 @@ async def pagina_login():
             _input_separador()
             _label_campo("Nombre de usuario")
             usuario_input = (
-                ui.input(placeholder="Ej: jgutierrez")
+                ui.input(placeholder="Ej: jperez")
                 .props("outlined dense")
                 .style("width:100%;")
             )
@@ -455,15 +456,24 @@ async def pagina_configuracion():
                         .style("width:100%;")
                     )
                 with ui.element("div").style("flex:1;"):
-                    _label_campo("Tipo de comprobante")
+                    _label_campo("Tipo(s) de comprobante")
+                    valor_inicial = s.get("tipos_comprobante") or [s.get("tipo_comprobante", "1")]
                     tipo_sel = (
                         ui.select(
                             options={v: l for v, l in TIPOS_COMPROBANTE},
-                            value=s.get("tipo_comprobante", "1"),
+                            value=valor_inicial,
+                            multiple=True,
                         )
-                        .props("outlined dense")
+                        .props("outlined dense use-chips clearable")
                         .style("width:100%;")
                     )
+            lbl_err_tipo = _lbl_error()
+
+            ui.label(
+                "Puede seleccionar mas de un tipo (por ejemplo Factura y Comprobante de "
+                "Retencion): se descargaran uno tras otro, en una sola corrida, para el "
+                "mismo RUC y periodo."
+            ).style(f"font-size:12px; color:{GRIS_MEDIO}; margin-top:4px; line-height:1.5;")
 
             ui.element("div").style("margin-top:20px;")
             with ui.element("div").style(
@@ -476,10 +486,17 @@ async def pagina_configuracion():
                 ).style(f"font-size:12px; color:{GRIS_MEDIO}; line-height:1.5;")
 
             def iniciar_descarga():
+                lbl_err_tipo.set_text("")
+                tipos = tipo_sel.value or []
+                if not tipos:
+                    lbl_err_tipo.set_text("Seleccione al menos un tipo de comprobante.")
+                    return
+
                 s["anio"] = anio_sel.value
                 s["mes"] = mes_sel.value
                 s["dia"] = dia_sel.value
-                s["tipo_comprobante"] = tipo_sel.value
+                s["tipos_comprobante"] = list(tipos)
+                s["tipo_comprobante"] = tipos[0]
                 s["paso"] = 4
                 s["proceso_activo"] = True
                 s["proceso_finalizado"] = False
@@ -514,10 +531,12 @@ async def pagina_descarga():
         with _card("580px"):
             stepper(4)
             _titulo("Proceso de descarga en curso")
+            _tipos_sel = s.get("tipos_comprobante") or [s.get("tipo_comprobante", "1")]
+            _tipos_nombres = ", ".join(_DICT_TIPOS.get(t, t) for t in _tipos_sel)
             _subtitulo(
                 f"RUC: {s.get('sri_ruc', '')}  |  "
                 f"Periodo: {_DICT_MESES.get(s.get('mes',''), '')} {s.get('anio', '')}  |  "
-                f"Tipo: {_DICT_TIPOS.get(s.get('tipo_comprobante', ''), '')}"
+                f"Tipo(s): {_tipos_nombres}"
             )
             divider()
 
@@ -575,11 +594,61 @@ async def pagina_descarga():
                 ui.navigate.to("/resultado")
             else:
                 with ui.element("div").style("width:100%; padding:4px 0;"):
+                    multi_tipo = len(estado.tipos_nombres) > 1
+
+                    if multi_tipo:
+                        # Chips de todos los tipos pedidos: verde = ya terminado,
+                        # magenta = el que se esta procesando ahora, gris = pendiente.
+                        # Deja explicito que se cambio de seccion (ej. de Factura a
+                        # Comprobante de Retencion) en vez de que se vea como una
+                        # continuacion silenciosa de la misma barra.
+                        with ui.element("div").style(
+                            "display:flex; gap:8px; flex-wrap:wrap; margin-bottom:14px;"
+                        ):
+                            for nombre in estado.tipos_nombres:
+                                if nombre in estado.tipos_finalizados:
+                                    bg, color_txt, texto_chip = SUCCESS_COLOR, BLANCO, f"✓ {nombre}"
+                                elif nombre == estado.tipo_actual_nombre:
+                                    bg, color_txt, texto_chip = MAGENTA, BLANCO, nombre
+                                else:
+                                    bg, color_txt, texto_chip = NAVY_LIGHT, GRIS_MEDIO, nombre
+                                ui.label(texto_chip).style(
+                                    f"background:{bg}; color:{color_txt}; padding:6px 14px; "
+                                    f"border-radius:20px; font-size:12.5px; font-weight:600; "
+                                    f"font-family:'Inter',sans-serif; white-space:nowrap; "
+                                    f"display:inline-block;"
+                                )
+
+                        ui.label(
+                            f"Tipo {estado.tipo_actual_indice} de {len(estado.tipos_nombres)}: "
+                            f"{estado.tipo_actual_nombre}"
+                        ).style(
+                            f"font-size:15px; font-weight:700; color:{GRIS_OSCURO}; "
+                            f"display:block; margin-bottom:6px;"
+                        )
+
                     ui.label(estado.fase).style(
                         f"font-size:14px; font-weight:500; color:{GRIS_OSCURO}; "
                         f"margin-bottom:16px; display:block;"
                     )
-                    if estado.total > 0:
+
+                    if multi_tipo:
+                        if estado.total_tipo_actual > 0:
+                            barra_progreso(
+                                estado.completados_tipo_actual, estado.total_tipo_actual,
+                                f"Comprobantes de {estado.tipo_actual_nombre}",
+                            )
+                            ui.label(
+                                f"Total general: {estado.completados} / {estado.total}"
+                            ).style(
+                                f"font-size:12px; color:{GRIS_MEDIO}; margin-top:8px; display:block;"
+                            )
+                        else:
+                            with ui.element("div").style(
+                                "display:flex; flex-direction:column; align-items:center; padding:8px 0;"
+                            ):
+                                ui.spinner(size="md", color=MAGENTA)
+                    elif estado.total > 0:
                         barra_progreso(estado.completados, estado.total, "Comprobantes descargados")
                     else:
                         with ui.element("div").style(
@@ -591,20 +660,28 @@ async def pagina_descarga():
 
     async def iniciar_scraping():
         global _orquestador_activo
+        tipos = s.get("tipos_comprobante") or [s.get("tipo_comprobante", "1")]
+
+        # Un solo login/navegacion para todos los tipos pedidos: el orquestador
+        # reutiliza la misma sesion internamente, solo repite "filtrar + descargar"
+        # por cada tipo. Mismo periodo (anio/mes/dia) para todos, tal como los
+        # ingreso el usuario en el paso de configuracion.
         params = ParametrosConsulta(
             ruc=s.get("sri_ruc", ""),
             password=s.get("sri_password", ""),
             anio=int(s.get("anio", datetime.now().year)),
             mes=int(s.get("mes", 1)),
             dia=int(s.get("dia", 0)),
-            tipo_comprobante=s.get("tipo_comprobante", "1"),
+            tipos_comprobante=tipos,
             codigo_colaborador=s.get("codigo_colaborador", ""),
             usuario_colaborador=s.get("nombre_usuario_banco", ""),
         )
-        orchestrator = ScrapingOrchestrator(params, on_progress=actualizar_ui)
-        _orquestador_activo = orchestrator
+
         try:
+            orchestrator = ScrapingOrchestrator(params, on_progress=actualizar_ui)
+            _orquestador_activo = orchestrator
             await orchestrator.ejecutar()
+
         except Exception as exc:
             logger.exception("Error no manejado en scraping: %s", exc)
             s["errores_proceso"] = [str(exc)]
@@ -640,6 +717,22 @@ async def pagina_resultado():
         for kw in ["credencial", "incorrecto", "acceso", "login"]
     )
 
+    # Definidas antes para poder usarlas en el aviso de "Sin resultados"
+    def nueva_consulta():
+        s["paso"] = 3
+        s["proceso_finalizado"] = False
+        s["errores_proceso"] = []
+        ui.navigate.to("/configuracion")
+
+    def otro_ruc():
+        # Mantiene config (periodo, tipo) pero limpia credenciales SRI
+        s.pop("sri_ruc", None)
+        s.pop("sri_password", None)
+        s["paso"] = 2
+        s["proceso_finalizado"] = False
+        s["errores_proceso"] = []
+        ui.navigate.to("/credenciales-sri")
+
     with centrar_contenido():
         with _card("580px"):
             stepper(5)
@@ -655,6 +748,16 @@ async def pagina_resultado():
             elif not completados:
                 _titulo("Sin resultados")
                 _subtitulo("No se encontraron comprobantes para el periodo y tipo seleccionados.")
+                with ui.element("div").style(
+                    "background:#FFF3CD; border:1px solid #E6C466; border-radius:8px; "
+                    "padding:14px 16px; margin-top:12px; margin-bottom:4px;"
+                ):
+                    ui.label("¿Deseas intentar con otro mes, dia o tipo de comprobante?").style(
+                        f"font-size:13px; color:{GRIS_OSCURO}; display:block; margin-bottom:10px; font-weight:600;"
+                    )
+                    with ui.element("div").style("display:flex; gap:10px; flex-wrap:wrap;"):
+                        btn_primario("Buscar otro periodo", on_click=nueva_consulta)
+                        btn_secundario("Probar con otro RUC", on_click=otro_ruc)
 
             else:
                 with ui.element("div").style(
@@ -759,11 +862,16 @@ async def pagina_resultado():
                         try:
                             origen = Path(carpeta_descarga)
                             destino_path = Path(destino) / origen.name
-                            destino_path.mkdir(parents=True, exist_ok=True)
+                            # rglob en vez de iterdir: cuando se piden varios tipos de
+                            # comprobante, los archivos quedan en subcarpetas por tipo
+                            # (ver storage/file_manager.py) y hay que copiarlas tambien.
                             copiados = 0
-                            for archivo in origen.iterdir():
+                            for archivo in origen.rglob("*"):
                                 if archivo.is_file():
-                                    shutil.copy2(archivo, destino_path / archivo.name)
+                                    relativo = archivo.relative_to(origen)
+                                    destino_archivo = destino_path / relativo
+                                    destino_archivo.parent.mkdir(parents=True, exist_ok=True)
+                                    shutil.copy2(archivo, destino_archivo)
                                     copiados += 1
                             notif_guardar.set_text(
                                 f"{copiados} archivo{'s' if copiados != 1 else ''} copiado{'s' if copiados != 1 else ''} a: {destino_path}"
@@ -776,21 +884,6 @@ async def pagina_resultado():
                     btn_primario("Guardar en mi equipo", on_click=guardar_en_equipo)
 
             # Acciones
-            def nueva_consulta():
-                s["paso"] = 3
-                s["proceso_finalizado"] = False
-                s["errores_proceso"] = []
-                ui.navigate.to("/configuracion")
-
-            def otro_ruc():
-                # Mantiene config (periodo, tipo) pero limpia credenciales SRI
-                s.pop("sri_ruc", None)
-                s.pop("sri_password", None)
-                s["paso"] = 2
-                s["proceso_finalizado"] = False
-                s["errores_proceso"] = []
-                ui.navigate.to("/credenciales-sri")
-
             with ui.element("div").style("display:flex; gap:10px; margin-top:8px; flex-wrap:wrap;"):
                 btn_secundario("Nueva consulta", on_click=nueva_consulta)
                 btn_primario("Descargar otro RUC", on_click=otro_ruc)
@@ -857,8 +950,6 @@ async def pagina_historial():
                     ).style(f"font-size:13px; color:{GRIS_OSCURO};")
 
             # Filtro por RUC y acciones
-            tabla_container = ui.element("div").style("width:100%;")
-
             with ui.element("div").style(
                 f"display:flex; gap:10px; align-items:flex-end; margin-bottom:16px; flex-wrap:wrap;"
             ):
@@ -880,7 +971,8 @@ async def pagina_historial():
 
             divider()
 
-            # Carga inicial
+            # Tabla de resultados (debajo de la barra de busqueda/acciones)
+            tabla_container = ui.element("div").style("width:100%;")
             await _cargar_tabla(tabla_container, "", codigo_colaborador, bypass_activo)
 
         with ui.element("div").style("margin-top:24px;"):
@@ -914,12 +1006,13 @@ async def _cargar_tabla(contenedor, ruc_filtro: str, codigo_colaborador: str, by
                     with ui.element("tr").style(
                         f"background:{GRIS_OSCURO}; border-bottom:2px solid {BORDER_COLOR};"
                     ):
-                        for col in ["Fecha", "RUC", "Periodo", "Tipo", "Encontrados", "Descargados", "Errores", "Estado", "Colaborador"]:
-                            ui.element("th").style(
+                        for col in ["Fecha", "RUC", "Periodo", "Tipo", "Encontrados", "Descargados", "Errores", "Estado", "Colaborador", "Archivos"]:
+                            with ui.element("th").style(
                                 f"padding:13px 16px; text-align:left; font-weight:600; "
                                 f"color:{BLANCO}; white-space:nowrap; font-family:'Inter',sans-serif; "
                                 f"font-size:13px; letter-spacing:0.3px;"
-                            ).text = col
+                            ):
+                                ui.label(col)
 
                 with ui.element("tbody"):
                     for i, fila in enumerate(filas):
@@ -953,17 +1046,30 @@ async def _cargar_tabla(contenedor, ruc_filtro: str, codigo_colaborador: str, by
                             estado = fila.get("ESTADO", "")
                             color_text, color_bg = _ESTADO_BADGE.get(estado, (GRIS_MEDIO, "#E2E3E5"))
                             with ui.element("td").style("padding:12px 16px;"):
-                                ui.element("span").style(
+                                ui.label(estado).style(
                                     f"background:{color_bg}; color:{color_text}; "
                                     f"padding:3px 10px; border-radius:20px; font-size:12px; "
                                     f"font-weight:700; font-family:'Inter',sans-serif; "
-                                    f"letter-spacing:0.3px;"
-                                ).text = estado
+                                    f"letter-spacing:0.3px; display:inline-block;"
+                                )
 
                             # Colaborador
                             codigo = fila.get("CODIGO_COLABORADOR") or ""
                             usuario = fila.get("USUARIO_COLABORADOR") or ""
                             _td(f"{codigo} {usuario}".strip() or "-")
+
+                            # Archivos: vista previa + descarga ZIP
+                            with ui.element("td").style("padding:8px 16px;"):
+                                carpeta_destino = fila.get("CARPETA_DESTINO") or ""
+                                if carpeta_destino and Path(carpeta_destino).is_dir():
+                                    btn_secundario(
+                                        "Ver archivos",
+                                        on_click=lambda c=carpeta_destino: _dialogo_archivos(c),
+                                    )
+                                else:
+                                    ui.label("No disponible").style(
+                                        f"font-size:12px; color:{GRIS_MEDIO}; font-style:italic;"
+                                    )
 
         ui.label(f"{len(filas)} registro{'s' if len(filas) != 1 else ''} encontrado{'s' if len(filas) != 1 else ''}.").style(
             f"font-size:12px; color:{GRIS_MEDIO}; margin-top:12px; display:block;"
@@ -977,7 +1083,80 @@ def _td(texto: str, align: str = "left", color: str = "") -> None:
     )
     if color:
         estilo += f" color:{color}; font-weight:600;"
-    ui.element("td").style(estilo).text = texto
+    with ui.element("td").style(estilo):
+        ui.label(texto)
+
+
+def _formatear_tamano(bytes_: int) -> str:
+    valor = float(bytes_)
+    for unidad in ("B", "KB", "MB", "GB"):
+        if valor < 1024 or unidad == "GB":
+            return f"{valor:.0f} {unidad}" if unidad == "B" else f"{valor:.1f} {unidad}"
+        valor /= 1024
+    return f"{valor:.1f} GB"
+
+
+def _generar_zip_carpeta(carpeta: str) -> bytes:
+    import io
+    import zipfile
+
+    origen = Path(carpeta)
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for archivo in origen.rglob("*"):
+            if archivo.is_file():
+                zf.write(archivo, arcname=str(archivo.relative_to(origen)))
+    return buf.getvalue()
+
+
+async def _dialogo_archivos(carpeta: str) -> None:
+    """Vista previa de los archivos de una sesion del historial, con descarga ZIP."""
+    origen = Path(carpeta)
+    archivos = sorted(
+        (f for f in origen.rglob("*") if f.is_file()),
+        key=lambda f: str(f.relative_to(origen)).lower(),
+    )
+
+    with ui.dialog() as dialogo, ui.card().style("min-width:420px; max-width:640px; padding:20px 24px;"):
+        ui.label(origen.name).style(
+            f"font-size:16px; font-weight:700; color:{GRIS_OSCURO}; display:block; margin-bottom:4px; "
+            f"font-family:'Inter',sans-serif;"
+        )
+        ui.label(f"{len(archivos)} archivo{'s' if len(archivos) != 1 else ''}").style(
+            f"font-size:12px; color:{GRIS_MEDIO}; display:block; margin-bottom:14px;"
+        )
+
+        if not archivos:
+            ui.label("Sin archivos en esta carpeta.").style(f"font-size:13px; color:{GRIS_MEDIO};")
+        else:
+            with ui.element("div").style(
+                f"max-height:320px; overflow-y:auto; border:1px solid {BORDER_COLOR}; "
+                f"border-radius:8px; padding:4px 0;"
+            ):
+                for archivo in archivos:
+                    relativo = archivo.relative_to(origen)
+                    tamano = _formatear_tamano(archivo.stat().st_size)
+                    with ui.element("div").style(
+                        f"display:flex; justify-content:space-between; gap:12px; "
+                        f"padding:7px 14px; border-bottom:1px solid {BORDER_COLOR}; "
+                        f"font-family:'Inter',sans-serif;"
+                    ):
+                        ui.label(str(relativo)).style(f"font-size:12.5px; color:{GRIS_OSCURO};")
+                        ui.label(tamano).style(f"font-size:12px; color:{GRIS_MEDIO}; white-space:nowrap;")
+
+        async def descargar_zip():
+            if not archivos:
+                ui.notify("No hay archivos para descargar.", type="warning")
+                return
+            contenido = await asyncio.to_thread(_generar_zip_carpeta, carpeta)
+            ui.download(contenido, f"{origen.name}.zip")
+
+        with ui.element("div").style("display:flex; gap:10px; margin-top:16px;"):
+            btn_secundario("Cerrar", on_click=dialogo.close)
+            if archivos:
+                btn_primario("Descargar ZIP", on_click=descargar_zip).style("flex:1;")
+
+    dialogo.open()
 
 
 def _generar_excel(filas: list[dict]) -> bytes:
@@ -1026,125 +1205,5 @@ def _generar_excel(filas: list[dict]) -> bytes:
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Archivos descargados
-# ─────────────────────────────────────────────────────────────────────────────
-
-@ui.page("/archivos")
-async def pagina_archivos():
-    import os
-    from config import settings as cfg
-    from storage.db_logger import consultar_sesiones
-
-    ui.add_head_html(CSS_GLOBAL)
-    s = _sesion()
-
-    if not s.get("autenticado"):
-        ui.navigate.to("/")
-        return
-
-    codigo_colaborador = s.get("codigo_colaborador", "")
-
-    header()
-
-    with centrar_contenido():
-        with ui.element("div").style(
-            f"background:{BLANCO}; border:1px solid {BORDER_COLOR}; border-radius:14px; "
-            f"padding:32px 40px; width:100%; max-width:1100px; "
-            f"box-shadow:0 4px 24px rgba(22,15,65,0.08);"
-        ):
-            ui.label("Archivos descargados").style(
-                f"font-size:20px; font-weight:600; color:{GRIS_OSCURO}; display:block; margin-bottom:4px;"
-            )
-            ui.label("Tus comprobantes almacenados en el servidor.").style(
-                f"font-size:13px; color:{GRIS_MEDIO}; display:block; margin-bottom:20px;"
-            )
-            divider()
-
-            base = Path(cfg.DOWNLOADS_BASE_DIR)
-            sesiones = await asyncio.to_thread(consultar_sesiones, "", codigo_colaborador, 1000)
-            carpetas_propias = {
-                Path(f["CARPETA_DESTINO"]).name
-                for f in sesiones
-                if f.get("CARPETA_DESTINO")
-            }
-
-            if cfg.AUTH_BYPASS_MODE:
-                with ui.element("div").style(
-                    f"background:#FFF3CD; border-left:3px solid #856404; "
-                    f"padding:10px 14px; border-radius:3px; margin-bottom:16px;"
-                ):
-                    ui.label(
-                        "BASE DE DATOS NO CONECTADA — AUTH_BYPASS_MODE activo. "
-                        "No es posible identificar tus archivos propios sin BD."
-                    ).style(f"font-size:13px; color:{GRIS_OSCURO};")
-
-            if not base.exists() or not carpetas_propias:
-                ui.label("No hay archivos descargados aun.").style(
-                    f"font-size:13px; color:{GRIS_MEDIO};"
-                )
-            else:
-                carpetas = sorted(
-                    [d for d in base.iterdir() if d.is_dir() and d.name in carpetas_propias],
-                    key=lambda d: d.name,
-                    reverse=True,
-                )
-                if not carpetas:
-                    ui.label("No hay archivos descargados aun.").style(
-                        f"font-size:13px; color:{GRIS_MEDIO};"
-                    )
-                else:
-                    for carpeta in carpetas:
-                        archivos = [f for f in carpeta.iterdir() if f.is_file()]
-                        xml_count = sum(1 for f in archivos if f.suffix.lower() == ".xml")
-                        pdf_count = sum(1 for f in archivos if f.suffix.lower() == ".pdf")
-                        otros = len(archivos) - xml_count - pdf_count
-
-                        with ui.element("div").style(
-                            f"display:flex; align-items:center; justify-content:space-between; "
-                            f"padding:14px 18px; border-radius:10px; margin-bottom:10px; "
-                            f"border:1px solid {BORDER_COLOR}; background:{FONDO}; flex-wrap:wrap; gap:10px;"
-                        ):
-                            with ui.element("div"):
-                                ui.label(carpeta.name).style(
-                                    f"font-size:15px; font-weight:600; color:{GRIS_OSCURO}; "
-                                    f"display:block; font-family:'Inter',sans-serif;"
-                                )
-                                resumen = []
-                                if xml_count:
-                                    resumen.append(f"{xml_count} XML")
-                                if pdf_count:
-                                    resumen.append(f"{pdf_count} PDF")
-                                if otros:
-                                    resumen.append(f"{otros} otros")
-                                ui.label(", ".join(resumen) if resumen else "Sin archivos").style(
-                                    f"font-size:13px; color:{GRIS_MEDIO}; font-family:'Inter',sans-serif;"
-                                )
-
-                            def _abrir(ruta=str(carpeta)):
-                                try:
-                                    if os.name == "nt":
-                                        os.startfile(ruta)
-                                    else:
-                                        import subprocess
-                                        subprocess.Popen(["xdg-open", ruta])
-                                except Exception:
-                                    pass
-
-                            btn_secundario("Abrir carpeta", on_click=_abrir)
-
-                    ui.label(f"{len(carpetas)} periodo{'s' if len(carpetas) != 1 else ''} almacenado{'s' if len(carpetas) != 1 else ''}.").style(
-                        f"font-size:12px; color:{GRIS_MEDIO}; margin-top:16px; display:block;"
-                    )
-
-        with ui.element("div").style("margin-top:24px;"):
-            ui.link("Volver al inicio", "/").style(
-                f"display:inline-block; font-size:13px; font-weight:600; "
-                f"color:{GRIS_OSCURO}; font-family:'Inter',sans-serif; "
-                f"text-decoration:none; padding:9px 20px; border-radius:8px; "
-                f"border:1.5px solid {BORDER_COLOR}; background:{BLANCO};"
-            )
 
 
