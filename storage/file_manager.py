@@ -28,6 +28,22 @@ def sanitizar_nombre(texto: str) -> str:
     return texto[:200]
 
 
+def sanitizar_nombre_archivo(texto: str) -> str:
+    """
+    Sanitiza para nombre de ARCHIVO (no carpeta), preservando espacios: el
+    formato pedido es "DD-MM-YYYY serie razon_social" y debe verse igual en
+    disco, no con guiones bajos. Solo se quitan los caracteres invalidos en
+    nombres de archivo de Windows.
+    """
+    texto = texto.strip()
+    texto = re.sub(r'[\\/:*?"<>|]', "", texto)
+    texto = re.sub(r"\s+", " ", texto)
+    # Razones sociales como "S. A." dejan un punto final que, pegado a la
+    # extension (.pdf/.xml), producia nombres con doble punto ("...S. A..pdf").
+    texto = texto.rstrip(".")
+    return texto[:200]
+
+
 def carpeta_descarga(ruc: str, anio: int, mes: int, subcarpeta: str = "") -> Path:
     """
     Carpeta general del periodo. Si se pasa `subcarpeta` (nombre del tipo de
@@ -46,7 +62,7 @@ def ruta_descarga(
     ruc: str, anio: int, mes: int, nombre_doc: str, extension: str,
     es_retencion: bool, subcarpeta: str = "",
 ) -> Path:
-    return carpeta_descarga(ruc, anio, mes, subcarpeta) / f"{sanitizar_nombre(nombre_doc)}.{extension}"
+    return carpeta_descarga(ruc, anio, mes, subcarpeta) / f"{sanitizar_nombre_archivo(nombre_doc)}.{extension}"
 
 
 def ruta_reporte(ruc: str, anio: int, mes: int, subcarpeta: str = "") -> Path:

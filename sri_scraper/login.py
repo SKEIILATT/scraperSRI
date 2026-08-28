@@ -79,7 +79,20 @@ async def login_sri(
                 pass
 
         # --- Paso 1: Ir a la pagina de inicio del SRI ---
-        await page.goto(URL_INICIO, wait_until="domcontentloaded", timeout=TIMEOUT_NAVEGACION)
+        try:
+            await page.goto(URL_INICIO, wait_until="domcontentloaded", timeout=TIMEOUT_NAVEGACION)
+        except Exception as e:
+            # Un hipo de red puntual (DNS, conexion reseteada, timeout de goto) no
+            # deberia tumbar todo el login sin siquiera intentar de nuevo -- se trata
+            # como cualquier otro motivo de reintento del flujo humanizado completo.
+            logger.warning(
+                "Error de navegacion a %s en intento %d/%d: %s", URL_INICIO, intento, MAX_INTENTOS, e,
+            )
+            if intento < MAX_INTENTOS:
+                await asyncio.sleep((1500 + (intento - 1) * 2000) / 1000)
+                continue
+            raise ErrorLoginTimeout(f"No se pudo conectar al portal SRI: {e}") from e
+
         # Pausa creciente entre intentos para no repetir el mismo patron de timing
         await asyncio.sleep((800 + (intento - 1) * 2500) / 1000)
 

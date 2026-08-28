@@ -10,6 +10,8 @@ Estrategia zero-touch reCAPTCHA:
 
 import logging
 import os
+import sys
+import uuid
 from pathlib import Path
 
 from playwright.async_api import async_playwright, Browser, BrowserContext, Page
@@ -96,6 +98,11 @@ class BrowserManager:
             args=[
                 "--no-first-run",
                 "--no-default-browser-check",
+                # La ventana debe arrancar siempre maximizada. Este flag lo pide
+                # al arranque; ademas se refuerza por CDP en _maximizar_y_traer_al_frente()
+                # porque Chrome ignora --start-maximized cuando el perfil persistente
+                # ya trae guardado el tamano de la ultima sesion.
+                "--start-maximized",
             ],
             # no_viewport=True: NO forzar un viewport CDP fijo. Con un viewport fijo,
             # window.innerWidth/innerHeight quedan recortados por Playwright mientras
@@ -118,29 +125,137 @@ class BrowserManager:
         )
         ejecutable = next((r for r in rutas_candidatas if r and os.path.isfile(r)), None)
 
-        if ejecutable:
-            # No se sobreescribe user_agent: el ejecutable real ya envia un UA
-            # consistente con sus propios headers Sec-CH-UA (Client Hints). Forzar
-            # un UA distinto (p.ej. "Chrome" sobre un binario de Edge) crea una
-            # discrepancia de fingerprint que reCAPTCHA Enterprise usa como senal de bot.
-            logger.info("Navegador iniciado con ejecutable: %s", ejecutable)
-            self._context = await self._playwright.chromium.launch_persistent_context(
-                str(perfil), executable_path=ejecutable, **launch_kwargs
-            )
-        else:
-            logger.warning(
-                "No se encontro Chrome/Edge instalado en las rutas conocidas. "
-                "Usando Chromium bundled de Playwright (requiere 'playwright install chromium')."
-            )
-            self._context = await self._playwright.chromium.launch_persistent_context(
-                str(perfil), user_agent=_UA, **launch_kwargs
-            )
+        try:
+            if ejecutable:
+                # No se sobreescribe user_agent: el ejecutable real ya envia un UA
+                # consistente con sus propios headers Sec-CH-UA (Client Hints). Forzar
+                # un UA distinto (p.ej. "Chrome" sobre un binario de Edge) crea una
+                # discrepancia de fingerprint que reCAPTCHA Enterprise usa como senal de bot.
+                logger.info("Navegador iniciado con ejecutable: %s", ejecutable)
+                self._context = await self._playwright.chromium.launch_persistent_context(
+                    str(perfil), executable_path=ejecutable, **launch_kwargs
+                )
+            else:
+                logger.warning(
+                    "No se encontro Chrome/Edge instalado en las rutas conocidas. "
+                    "Usando Chromium bundled de Playwright (requiere 'playwright install chromium')."
+                )
+                self._context = await self._playwright.chromium.launch_persistent_context(
+                    str(perfil), user_agent=_UA, **launch_kwargs
+                )
+        except Exception as e:
+            # El fallo mas comun aqui es el perfil persistente bloqueado por otro
+            # proceso Chrome/Edge que quedo abierto (ej. una corrida anterior que
+            # crasheo sin cerrar el navegador). Playwright reporta esto con un
+            # error crudo poco accionable; se traduce a un mensaje claro para
+            # que el operador sepa que revisar en vez de ver un stacktrace.
+            await self._playwright.stop()
+            self._playwright = None
+            raise RuntimeError(
+                f"No se pudo iniciar el navegador con el perfil persistente en {perfil}. "
+                "Verifique que no haya otra instancia de Chrome/Edge usando este perfil "
+                "(cierre procesos residuales del navegador) e intente de nuevo. "
+                f"Detalle: {e}"
+            ) from e
 
         # Enmascarar navigator.webdriver en todas las paginas nuevas
         await self._context.add_init_script(_STEALTH_SCRIPT)
 
+        # Limite explicito para cualquier accion/espera de Playwright (click,
+        # wait_for_selector, etc.). Sin esto, algunas esperas usan el default
+        # interno de Playwright (30s) de forma implicita; fijarlo aqui deja el
+        # limite documentado y consistente con los timeouts propios del
+        # orquestador (ver TIMEOUT_DESCARGA_ITEM en orchestrator.py), y evita
+        # que una espera se cuelgue mas alla de lo esperado.
+        self._context.set_default_timeout(20_000)
+
         self._page = self._context.pages[0] if self._context.pages else await self._context.new_page()
+
+        await self._fijar_ventana_al_frente()
+        await self._maximizar_y_traer_al_frente()
+
         return self._page
+
+    async def _maximizar_y_traer_al_frente(self) -> None:
+        """
+        Deja la ventana maximizada y en primer plano.
+
+        Se usa CDP en vez de confiar solo en --start-maximized porque el perfil
+        persistente recuerda el tamano/posicion de la corrida anterior y pisa el flag.
+        Chrome exige pasar por windowState 'normal' antes de cambiar a otro estado.
+        """
+        if not self._page or settings.BROWSER_HEADLESS:
+            return
+        try:
+            cdp = await self._context.new_cdp_session(self._page)
+            result = await cdp.send("Browser.getWindowForTarget")
+            window_id = result["windowId"]
+            await cdp.send("Browser.setWindowBounds", {
+                "windowId": window_id,
+                "bounds": {"windowState": "normal"},
+            })
+            await cdp.send("Browser.setWindowBounds", {
+                "windowId": window_id,
+                "bounds": {"windowState": "maximized"},
+            })
+            await cdp.detach()
+            await self._page.bring_to_front()
+        except Exception as e:
+            logger.debug("No se pudo maximizar la ventana: %s", e)
+
+    async def _fijar_ventana_al_frente(self) -> None:
+        """
+        Marca la ventana del navegador como 'siempre visible' (topmost) en Windows,
+        para que no quede tapada por la app ni por otras ventanas durante el scraping.
+
+        Para ubicar el HWND correcto (y no otra ventana de Chrome/Edge que el usuario
+        tenga abierta) se le pone un titulo unico temporal a la pagina inicial, se
+        busca esa ventana por titulo y luego se restaura el titulo.
+        """
+        if not self._page or settings.BROWSER_HEADLESS or sys.platform != "win32":
+            return
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            marcador = f"sri-scraper-{uuid.uuid4().hex}"
+            titulo_previo = await self._page.title()
+            await self._page.evaluate("t => document.title = t", marcador)
+
+            user32 = ctypes.windll.user32
+            encontrada: list[int] = []
+
+            WNDENUMPROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+
+            def _callback(hwnd, _lparam):
+                largo = user32.GetWindowTextLengthW(hwnd)
+                if largo:
+                    buffer = ctypes.create_unicode_buffer(largo + 1)
+                    user32.GetWindowTextW(hwnd, buffer, largo + 1)
+                    if marcador in buffer.value:
+                        encontrada.append(hwnd)
+                        return False
+                return True
+
+            user32.EnumWindows(WNDENUMPROC(_callback), 0)
+
+            await self._page.evaluate("t => document.title = t", titulo_previo)
+
+            if not encontrada:
+                logger.debug("No se encontro la ventana del navegador para fijarla al frente.")
+                return
+
+            HWND_TOPMOST = -1
+            SWP_NOMOVE = 0x0002
+            SWP_NOSIZE = 0x0001
+            SWP_SHOWWINDOW = 0x0040
+            user32.SetWindowPos(
+                encontrada[0], HWND_TOPMOST, 0, 0, 0, 0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW,
+            )
+            logger.info("Ventana del navegador fijada como siempre visible (topmost).")
+        except Exception as e:
+            logger.debug("No se pudo fijar la ventana al frente: %s", e)
 
     async def minimizar(self) -> None:
         """Minimiza la ventana del navegador (solo en modo headed)."""
@@ -158,19 +273,8 @@ class BrowserManager:
             logger.debug("No se pudo minimizar la ventana: %s", e)
 
     async def mostrar(self) -> None:
-        """Restaura y trae al frente la ventana del navegador."""
-        if not self._page or settings.BROWSER_HEADLESS:
-            return
-        try:
-            cdp = await self._context.new_cdp_session(self._page)
-            result = await cdp.send("Browser.getWindowForTarget")
-            await cdp.send("Browser.setWindowBounds", {
-                "windowId": result["windowId"],
-                "bounds": {"windowState": "normal"},
-            })
-            await cdp.detach()
-        except Exception as e:
-            logger.debug("No se pudo restaurar la ventana: %s", e)
+        """Restaura la ventana del navegador maximizada y la trae al frente."""
+        await self._maximizar_y_traer_al_frente()
 
     @property
     def page(self) -> Page | None:
@@ -181,10 +285,22 @@ class BrowserManager:
         return self._context
 
     async def cerrar(self) -> None:
+        # Ambos pasos van en su propio try/except: esto se llama desde el
+        # `finally` del orquestador, y una excepcion sin atrapar aqui (ej. el
+        # navegador ya crasheo y el contexto no responde) se propagaria
+        # reemplazando cualquier error real ya capturado en el estado del
+        # proceso, dejando al usuario con un "Error inesperado" generico en
+        # vez del detalle real de lo que fallo.
         if self._context:
-            await self._context.close()
+            try:
+                await self._context.close()
+            except Exception as e:
+                logger.warning("Error al cerrar el contexto del navegador: %s", e)
         if self._playwright:
-            await self._playwright.stop()
+            try:
+                await self._playwright.stop()
+            except Exception as e:
+                logger.warning("Error al detener Playwright: %s", e)
         self._context = None
         self._page = None
         self._playwright = None

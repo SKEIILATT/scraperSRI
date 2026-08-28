@@ -16,7 +16,7 @@ from playwright.async_api import Page, TimeoutError as PlaywrightTimeout
 
 from .humanize import (
     escribir_humanizado, mover_y_click, pausa, seleccionar_opcion,
-    simular_lectura, simular_lectura_formulario, acercarse_lento,
+    simular_lectura, simular_lectura_formulario, acercarse_lento, click_directo,
 )
 
 logger = logging.getLogger(__name__)
@@ -58,14 +58,35 @@ TIPOS_COMPROBANTE = {
 }
 
 
+# Extrae la parte numerica "establecimiento-puntoEmision-secuencial" del texto
+# de la columna "Tipo y serie de comprobante" (ej. "Factura  323-002-000103524" -> "323-002-000103524")
+_RE_SERIE = re.compile(r"\d{3}-\d{3}-\d+")
+
+
 @dataclass
 class FilaComprobante:
-    indice: int                   # indice 0-based en la pagina actual
+    indice: int                   # indice real de fila usado por PrimeFaces (data-ri), NO la posicion local en la pagina
     tipo_y_serie: str             # ej. "Factura 001-012-021762077"
+    razon_social: str = ""        # razon social del emisor (columna "RUC y Razon social emisor")
+    fecha_emision: str = ""       # fecha de emision en formato DD/MM/YYYY (columna "Fecha emision")
     es_retencion: bool = False
     xml_descargado: bool = False
     pdf_descargado: bool = False
     error: str = ""
+
+    @property
+    def nombre_archivo(self) -> str:
+        """
+        Nombre de archivo pedido por el usuario: "DD-MM-YYYY serie razon_social"
+        (ej. "01-04-2026 001-104-000041246 TAGSA"). Si falta fecha o razon social
+        (columnas no encontradas), cae de vuelta a tipo_y_serie para no perder el
+        archivo por completo.
+        """
+        fecha = self.fecha_emision.replace("/", "-")
+        m = _RE_SERIE.search(self.tipo_y_serie)
+        serie = m.group(0) if m else self.tipo_y_serie
+        partes = [p for p in (fecha, serie, self.razon_social) if p]
+        return " ".join(partes) if partes else self.tipo_y_serie
 
 
 @dataclass
@@ -131,9 +152,14 @@ async def _verificar_error_captcha(page: Page) -> None:
                 texto = (await elementos.nth(i).inner_text()).strip()
                 if "captcha" in texto.lower():
                     logger.warning("CAPTCHA detectado en formulario de consulta: %s", texto)
+                    # OJO: el navegador corre en el servidor, no en el equipo del
+                    # usuario -- nadie puede "resolver" nada en esa ventana. El
+                    # mensaje no debe prometer una accion que no existe; solo
+                    # informa que el SRI rechazo la verificacion automatica.
                     raise ErrorCaptchaConsulta(
-                        "El formulario de consulta requiere verificacion CAPTCHA. "
-                        "Resuelva el CAPTCHA visible en la ventana del navegador y presione 'Continuar'."
+                        "El SRI rechazo la verificacion automatica (reCAPTCHA) para este "
+                        "tipo de comprobante tras varios reintentos. Puede deberse a un "
+                        "bloqueo temporal — intente nuevamente en unos minutos."
                     )
         except ErrorCaptchaConsulta:
             raise
@@ -252,7 +278,22 @@ async def navegar_a_comprobantes(
             except Exception:
                 pass
 
-        await page.goto(URL_COMPROBANTES_PORTAL, wait_until="domcontentloaded", timeout=40_000)
+        try:
+            await page.goto(URL_COMPROBANTES_PORTAL, wait_until="domcontentloaded", timeout=40_000)
+        except Exception as e:
+            # Igual que en login.py: un hipo de red puntual en el goto no debe
+            # escapar del loop de reintentos ya existente para este flujo.
+            logger.warning(
+                "Error de navegacion al gateway de comprobantes (intento %d/%d): %s",
+                intento, MAX_REINTENTOS, e,
+            )
+            if intento < MAX_REINTENTOS:
+                await pausa(2000, 4000)
+                continue
+            await _tomar_screenshot_debug(page, "debug_comprobantes_goto_fallo.png")
+            raise RuntimeError(
+                f"No se pudo conectar al portal de comprobantes tras {MAX_REINTENTOS} intentos: {e}"
+            ) from e
         await pausa(1000, 1800)
 
         url_actual = page.url
@@ -377,19 +418,27 @@ async def aplicar_filtros(
     mes: str,
     dia: str,
     tipo_comprobante: str,
+    lectura_completa: bool = True,
 ) -> None:
     """
     Selecciona los filtros en el formulario frmPrincipal y hace click en Consultar.
     Espera que la tabla de resultados cargue antes de retornar.
+
+    `lectura_completa=False` omite las fases 1 y 2 (lectura larga de la pagina
+    y recorrido visual del formulario). Solo debe usarse para el 2do+ tipo de
+    comprobante pedido en la MISMA corrida ya autenticada, donde la sesion ya
+    establecio confianza con este mismo formulario en el envio anterior — el
+    envio en si (fases 3-6, que es lo que reCAPTCHA puntua) no cambia.
     """
     logger.info("Aplicando filtros: anio=%s mes=%s dia=%s tipo=%s", anio, mes, dia, tipo_comprobante)
 
-    # Fase 1: lectura larga de la pagina — reCAPTCHA evalua el tiempo y movimiento
-    # desde que carga hasta la primera interaccion
-    await simular_lectura(page, segundos_min=8.0, segundos_max=14.0)
+    if lectura_completa:
+        # Fase 1: lectura larga de la pagina — reCAPTCHA evalua el tiempo y movimiento
+        # desde que carga hasta la primera interaccion
+        await simular_lectura(page, segundos_min=8.0, segundos_max=14.0)
 
-    # Fase 2: revisar visualmente los campos del formulario antes de tocarlos
-    await simular_lectura_formulario(page, _CAMPOS_FORMULARIO)
+        # Fase 2: revisar visualmente los campos del formulario antes de tocarlos
+        await simular_lectura_formulario(page, _CAMPOS_FORMULARIO)
 
     # Fase 3: seleccionar filtros con pausas largas (humano que piensa entre selecciones)
     await seleccionar_opcion(page, _SELECTOR_ANO, anio)
@@ -465,6 +514,18 @@ async def obtener_filas_pagina(page: Page, tipo_comprobante: str) -> list[FilaCo
         if await celdas.count() == 0:
             continue
 
+        # PrimeFaces expone en `data-ri` el indice REAL de la fila (usado en los
+        # ids de sus botones, ej. "tablaCompRecibidos:50:lnkXml"). No es lo mismo
+        # que la posicion local `i` dentro de la pagina actual: en la pagina 2+,
+        # `data-ri` sigue numerando desde donde quedo la pagina 1 (ej. 50, 51...)
+        # mientras que `i` siempre reinicia en 0. Usar `i` aqui hacia que la
+        # descarga de XML/PDF apuntara a selectores que no existen en paginas
+        # distintas de la primera (no descargaba nada, sin importar los reintentos).
+        indice_real = i
+        data_ri = await row.get_attribute("data-ri")
+        if data_ri is not None and data_ri.strip().isdigit():
+            indice_real = int(data_ri)
+
         # La columna de tipo y serie suele ser la primera o segunda
         tipo_y_serie = ""
         for col_idx in range(min(3, await celdas.count())):
@@ -484,8 +545,32 @@ async def obtener_filas_pagina(page: Page, tipo_comprobante: str) -> list[FilaCo
                     tipo_y_serie = texto
                     break
 
+        # Columna "RUC y Razon social emisor" trae ambas lineas separadas por <br>
+        # (ej. "0990017514001\nTIENDAS INDUSTRIALES ASOCIADAS TIA S. A."); la razon
+        # social es la ultima linea. Columna "Fecha emision" es la unica con formato
+        # de solo fecha (DD/MM/YYYY) -- "Fecha y hora de autorizacion" tambien tiene
+        # hora, por eso se exige match exacto sin sufijo de hora.
+        razon_social = ""
+        fecha_emision = ""
+        for col_idx in range(await celdas.count()):
+            texto = (await celdas.nth(col_idx).inner_text()).strip()
+            if not texto:
+                continue
+            if not razon_social and re.match(r"^\d{13}", texto):
+                lineas = [l.strip() for l in texto.splitlines() if l.strip()]
+                if len(lineas) > 1:
+                    razon_social = lineas[-1]
+            if not fecha_emision and re.match(r"^\d{2}/\d{2}/\d{4}$", texto):
+                fecha_emision = texto
+
         es_retencion = tipo_comprobante == "6"
-        filas.append(FilaComprobante(indice=i, tipo_y_serie=tipo_y_serie, es_retencion=es_retencion))
+        filas.append(FilaComprobante(
+            indice=indice_real,
+            tipo_y_serie=tipo_y_serie,
+            razon_social=razon_social,
+            fecha_emision=fecha_emision,
+            es_retencion=es_retencion,
+        ))
 
     return filas
 
@@ -609,7 +694,7 @@ async def descargar_reporte(page: Page, ruta_destino: str) -> bool:
     """
     try:
         async with page.expect_download(timeout=30_000) as dl_info:
-            await mover_y_click(page, _frm(":lnkTxtlistado"), rapido=True)
+            await click_directo(page, _frm(":lnkTxtlistado"))
         descarga = await dl_info.value
         await descarga.save_as(ruta_destino)
         logger.info("Reporte descargado: %s", ruta_destino)
@@ -634,13 +719,13 @@ async def descargar_pdf(page: Page, indice: int, ruta_destino: str) -> bool:
 async def _descargar_doc(page: Page, selector: str, ruta_destino: str, tipo: str) -> bool:
     for intento in range(1, 4):
         try:
-            async with page.expect_download(timeout=30_000) as dl_info:
-                await mover_y_click(page, selector, rapido=True)
+            async with page.expect_download(timeout=20_000) as dl_info:
+                await click_directo(page, selector)
             descarga = await dl_info.value
             await descarga.save_as(ruta_destino)
             logger.debug("%s descargado: %s", tipo, ruta_destino)
             return True
         except Exception as e:
             logger.warning("Intento %d/%d fallido para %s (%s): %s", intento, 3, tipo, selector, e)
-            await pausa(1000, 2000)
+            await pausa(500, 1000)
     return False

@@ -18,6 +18,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Awaitable
 
+from playwright.async_api import TimeoutError as PlaywrightTimeout
+
 from .browser import BrowserManager
 from .humanize import pausa, simular_lectura
 from .login import login_sri, ErrorCredenciales, ErrorRecaptcha, ErrorLoginTimeout
@@ -41,6 +43,15 @@ from storage.file_manager import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Red de seguridad adicional a los reintentos/timeouts internos de consulta.py:
+# si una descarga individual o la actualizacion de progreso de la UI se cuelgan
+# por una causa imprevista (ej. un dialogo nativo del SO, un cliente
+# desconectado), esto evita que TODA la corrida se congele indefinidamente.
+TIMEOUT_DESCARGA_ITEM = 90       # segundos
+TIMEOUT_CALLBACK_PROGRESO = 10   # segundos
+TIMEOUT_PAGINACION = 60          # segundos (cambio de pagina / lectura de filas)
+TIMEOUT_INTERVENCION = 300       # segundos: limite de espera por intervencion manual
 
 
 @dataclass
@@ -93,10 +104,50 @@ class ScrapingOrchestrator:
 
     async def _notificar(self, fase: str) -> None:
         self._estado.fase = fase
+        await self._notificar_progreso_directo()
+
+    async def _notificar_progreso_directo(self) -> None:
+        """
+        Envia el estado actual a la UI sin cambiar de fase (se usa tanto en
+        cambios de fase como en el progreso item a item de la descarga).
+        Acotado con timeout: si el callback de la UI se cuelga (ej. cliente
+        desconectado), no debe frenar el resto del scraping.
+        """
         try:
-            await self._on_progress(self._estado)
+            await asyncio.wait_for(self._on_progress(self._estado), timeout=TIMEOUT_CALLBACK_PROGRESO)
         except Exception as e:
-            logger.warning("Error en callback de progreso: %s", e)
+            logger.warning("Error o timeout en callback de progreso: %s", e)
+
+    async def _con_watchdog(self, corutina, timeout: float, descripcion: str, valor_default):
+        """
+        Ejecuta cualquier paso puntual del scraping (descarga de un archivo,
+        cambio de pagina, lectura de filas) con un limite de tiempo total.
+        consulta.py ya reintenta y acota cada operacion por su cuenta; este
+        watchdog es la ultima linea de defensa para que un cuelgue imprevisto
+        (ej. un elemento que nunca queda clickeable, un cliente desconectado)
+        no congele el resto de la corrida — se registra la advertencia y se
+        continua con `valor_default` en vez de quedar esperando para siempre.
+        """
+        try:
+            return await asyncio.wait_for(corutina, timeout=timeout)
+        except asyncio.TimeoutError:
+            logger.warning(
+                "%s excedio %ds sin responder — se continua con valor por defecto.",
+                descripcion, timeout,
+            )
+            return valor_default
+        except Exception as e:
+            logger.warning("Error inesperado en %s: %s", descripcion, e)
+            return valor_default
+
+    async def _descargar_con_watchdog(self, corutina) -> bool:
+        return await self._con_watchdog(corutina, TIMEOUT_DESCARGA_ITEM, "Descarga individual", False)
+
+    async def _paginar_con_watchdog(self, corutina) -> None:
+        await self._con_watchdog(corutina, TIMEOUT_PAGINACION, "Cambio de pagina", None)
+
+    async def _leer_filas_con_watchdog(self, corutina) -> list:
+        return await self._con_watchdog(corutina, TIMEOUT_PAGINACION, "Lectura de filas de la tabla", [])
 
     def solicitar_cancelacion(self) -> None:
         self._cancelar = True
@@ -211,35 +262,59 @@ class ScrapingOrchestrator:
 
                 await _notificar_tipo(f"Consultando {nombre_tipo} de {mes_nombre} {p.anio}")
 
-                # El reCAPTCHA de este formulario tambien es invisible/score-based: un
-                # rechazo no deja nada visible que un humano pueda resolver a mano, asi
-                # que la unica opcion real es reintentar el envio unas pocas veces con
-                # pausas crecientes (recargando el formulario para un token fresco).
-                MAX_INTENTOS_FILTROS = 3
+                # El navegador corre en la maquina servidor, no en el equipo del
+                # usuario: nadie puede ver la ventana ni resolver nada a mano ahi,
+                # asi que la UNICA palanca real ante un rechazo es reintentar en
+                # automatico. El reCAPTCHA de este formulario tambien es
+                # invisible/score-based (nunca presenta un desafio visual, ni
+                # aunque alguien estuviera mirando la pantalla del servidor).
+                MAX_INTENTOS_FILTROS = 4
                 filtro_ok = False
+                ultimo_error: Exception | None = None
                 for intento_filtros in range(1, MAX_INTENTOS_FILTROS + 1):
+                    if self._cancelar:
+                        break
+                    # Lectura larga solo en el primer tipo pedido (primer envio
+                    # puntuado de la corrida) o si este tipo ya fue rechazado por
+                    # verificacion antes (intento > 1): ahi conviene recuperar
+                    # confianza con la lectura completa. Para el 2do+ tipo, en su
+                    # primer intento, la sesion ya viene con confianza establecida
+                    # del envio anterior y no hace falta repetirla.
+                    lectura_completa = idx == 1 or intento_filtros > 1
                     try:
                         await aplicar_filtros(
                             page, str(p.anio), str(p.mes), str(p.dia), tipo,
+                            lectura_completa=lectura_completa,
                         )
                         filtro_ok = True
                         break
-                    except ErrorCaptchaConsulta as e:
+                    except (ErrorCaptchaConsulta, RuntimeError, PlaywrightTimeout) as e:
+                        # RuntimeError cubre el caso de esperar_tabla() (la tabla no
+                        # cargo por cualquier motivo, no solo un mensaje explicito de
+                        # captcha) y PlaywrightTimeout cubre esperas puntuales que
+                        # revienten dentro de aplicar_filtros. Antes solo se atrapaba
+                        # ErrorCaptchaConsulta aqui, asi que estas otras fallas se
+                        # escapaban del loop y tumbaban TODA la corrida (todos los
+                        # tipos, no solo el actual) via el catch-all de mas abajo.
+                        ultimo_error = e
                         if intento_filtros < MAX_INTENTOS_FILTROS:
                             logger.info(
-                                "Consulta rechazada por verificacion (tipo %s, intento %d/%d). Reintentando...",
-                                tipo, intento_filtros, MAX_INTENTOS_FILTROS,
+                                "Consulta fallida (tipo %s, intento %d/%d): %s. Reintentando...",
+                                tipo, intento_filtros, MAX_INTENTOS_FILTROS, e,
                             )
                             await _notificar_tipo(
                                 f"Verificacion no superada - reintentando ({intento_filtros}/{MAX_INTENTOS_FILTROS})"
                             )
                             await pausa(5000, 9000)
                             await navegar_a_comprobantes(page, p.ruc, p.password)
-                            continue
-                        # Se agotaron los reintentos automaticos: no hay nada visible
-                        # que un humano pueda resolver. Se registra el error de este
-                        # tipo puntual y se sigue con el resto de tipos pedidos.
-                        self._estado.errores.append(f"{nombre_tipo}: {e}")
+                            # En la ultima oportunidad antes de rendirse, un warm-up
+                            # adicional (revisitar el perfil, igual que al inicio de
+                            # la corrida) intenta reconstruir confianza de sesion.
+                            if intento_filtros == MAX_INTENTOS_FILTROS - 1:
+                                await self._calentar_sesion(page)
+
+                if not filtro_ok and ultimo_error is not None:
+                    self._estado.errores.append(f"{nombre_tipo}: {ultimo_error}")
 
                 if not filtro_ok:
                     self._estado.tipos_finalizados = self._estado.tipos_finalizados + [nombre_tipo]
@@ -262,14 +337,16 @@ class ScrapingOrchestrator:
                     await _notificar_tipo("Reporte descargado" if ok else "Reporte no disponible")
 
                 # --- Conteo previo + descarga pagina a pagina ---
-                n_paginas = await obtener_total_paginas(page)
+                n_paginas = await self._con_watchdog(
+                    obtener_total_paginas(page), TIMEOUT_PAGINACION, "Lectura del total de paginas", 1,
+                )
                 logger.info("Tipo %s: total de paginas en tabla: %d", tipo, n_paginas)
 
                 conteo_por_pagina: list[int] = []
                 for pag in range(1, n_paginas + 1):
                     if pag > 1:
-                        await ir_a_pagina(page, pag)
-                    filas_pag = await obtener_filas_pagina(page, tipo)
+                        await self._paginar_con_watchdog(ir_a_pagina(page, pag))
+                    filas_pag = await self._leer_filas_con_watchdog(obtener_filas_pagina(page, tipo))
                     conteo_por_pagina.append(len(filas_pag))
 
                 total_tipo = sum(conteo_por_pagina)
@@ -283,9 +360,9 @@ class ScrapingOrchestrator:
                         break
 
                     if n_paginas > 1:
-                        await ir_a_pagina(page, pag)
+                        await self._paginar_con_watchdog(ir_a_pagina(page, pag))
 
-                    filas = await obtener_filas_pagina(page, tipo)
+                    filas = await self._leer_filas_con_watchdog(obtener_filas_pagina(page, tipo))
 
                     for fila in filas:
                         if self._cancelar:
@@ -299,12 +376,14 @@ class ScrapingOrchestrator:
 
                         # Descargar XML (omitir si ya existe en disco)
                         ruta_xml = str(ruta_descarga(
-                            p.ruc, p.anio, p.mes, fila.tipo_y_serie, "xml", fila.es_retencion, subcarpeta,
+                            p.ruc, p.anio, p.mes, fila.nombre_archivo, "xml", fila.es_retencion, subcarpeta,
                         ))
                         if Path(ruta_xml).exists():
                             ok_xml = True
                         else:
-                            ok_xml = await descargar_xml(page, fila.indice, ruta_xml)
+                            ok_xml = await self._descargar_con_watchdog(
+                                descargar_xml(page, fila.indice, ruta_xml)
+                            )
                         fila.xml_descargado = ok_xml
                         if not ok_xml:
                             msg = f"{nombre_tipo}: XML fallido: {fila.tipo_y_serie}"
@@ -313,12 +392,14 @@ class ScrapingOrchestrator:
 
                         # Descargar PDF/RIDE (omitir si ya existe en disco)
                         ruta_pdf = str(ruta_descarga(
-                            p.ruc, p.anio, p.mes, fila.tipo_y_serie, "pdf", fila.es_retencion, subcarpeta,
+                            p.ruc, p.anio, p.mes, fila.nombre_archivo, "pdf", fila.es_retencion, subcarpeta,
                         ))
                         if Path(ruta_pdf).exists():
                             ok_pdf = True
                         else:
-                            ok_pdf = await descargar_pdf(page, fila.indice, ruta_pdf)
+                            ok_pdf = await self._descargar_con_watchdog(
+                                descargar_pdf(page, fila.indice, ruta_pdf)
+                            )
                         fila.pdf_descargado = ok_pdf
                         if not ok_pdf:
                             msg = f"{nombre_tipo}: PDF fallido: {fila.tipo_y_serie}"
@@ -327,7 +408,7 @@ class ScrapingOrchestrator:
                         completados_tipo += 1
                         self._estado.completados = completados_previos + completados_tipo
                         self._estado.completados_tipo_actual = completados_tipo
-                        await self._on_progress(self._estado)
+                        await self._notificar_progreso_directo()
 
                 total_previos += total_tipo
                 completados_previos += completados_tipo
@@ -416,15 +497,35 @@ class ScrapingOrchestrator:
         except Exception as exc:
             logger.warning("Error al registrar sesion en BD (no critico): %s", exc)
 
-    async def _esperar_intervencion(self, page) -> None:
+    async def _esperar_intervencion(self, page) -> bool:
         """
         Restaura la ventana del navegador y espera a que el usuario resuelva
-        la intervencion. La ventana se mantiene visible (no se vuelve a minimizar).
+        la intervencion (ej. hacer clic en 'Consultar' a mano si el CAPTCHA
+        bloqueo los envios automaticos). La ventana se mantiene visible.
+
+        Acotado a TIMEOUT_INTERVENCION: `_orquestador_activo` es un singleton
+        global en pages.py, asi que una espera indefinida aqui bloquearia
+        cualquier otra corrida en todo el proceso si nadie responde. Si se
+        agota el tiempo, se retoma el flujo automatico (que terminara
+        marcando el tipo actual como fallido) en vez de colgar la corrida.
+
+        Retorna True si el usuario confirmo con 'Continuar', False si se
+        cancelo el proceso o se agoto el tiempo de espera.
         """
-        logger.info("Esperando intervencion del usuario...")
+        logger.info("Esperando intervencion manual del usuario (limite %ds)...", TIMEOUT_INTERVENCION)
         await self._browser.mostrar()
+        transcurrido = 0
+        agotado = False
         while self._estado.requiere_intervencion and not self._cancelar:
+            if transcurrido >= TIMEOUT_INTERVENCION:
+                logger.warning("Se agoto el tiempo de espera de intervencion manual.")
+                agotado = True
+                break
             await asyncio.sleep(1)
+            transcurrido += 1
+        self._estado.requiere_intervencion = False
+        self._estado.mensaje_intervencion = ""
+        return not agotado and not self._cancelar
 
     def resolver_intervencion(self) -> None:
         """Llamado desde la UI cuando el usuario confirma que resolvio el captcha."""

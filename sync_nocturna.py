@@ -96,7 +96,15 @@ def _consultar_rucs_activos(periodos: list[tuple[int, int]]) -> list[dict]:
 
 
 async def _sincronizar_uno(ruc: str, anio: int, mes: int, tipo: str) -> None:
-    password = obtener(ruc)
+    try:
+        password = obtener(ruc)
+    except Exception as exc:
+        # keyring/DPAPI puede fallar al correr como tarea programada sin sesion
+        # interactiva de Windows cargada. No debe tumbar el resto del batch.
+        logger.error(
+            "No se pudo leer credenciales del Credential Manager para RUC %s: %s", ruc, exc,
+        )
+        return
     if not password:
         logger.warning(
             "Sin credenciales guardadas para RUC %s — omitiendo periodo %d/%02d tipo %s. "
@@ -160,12 +168,21 @@ async def main() -> None:
     logger.info("Combinaciones a procesar: %d", len(registros))
 
     for reg in registros:
-        await _sincronizar_uno(
-            ruc=reg["ruc_contribuyente"],
-            anio=reg["periodo_anio"],
-            mes=reg["periodo_mes"],
-            tipo=reg["tipo_comprobante_cod"],
-        )
+        try:
+            await _sincronizar_uno(
+                ruc=reg["ruc_contribuyente"],
+                anio=reg["periodo_anio"],
+                mes=reg["periodo_mes"],
+                tipo=reg["tipo_comprobante_cod"],
+            )
+        except Exception as exc:
+            # Un fallo no controlado en una combinacion (ej. navegador crasheo,
+            # perfil bloqueado) no debe cancelar el resto del batch nocturno.
+            logger.error(
+                "Fallo no controlado sincronizando RUC=%s periodo=%d/%02d tipo=%s: %s",
+                reg["ruc_contribuyente"], reg["periodo_anio"], reg["periodo_mes"],
+                reg["tipo_comprobante_cod"], exc,
+            )
 
     duracion = (datetime.now() - inicio).total_seconds()
     logger.info("=== Fin sincronizacion nocturna (%.0fs) ===", duracion)

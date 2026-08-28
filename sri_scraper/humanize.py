@@ -96,6 +96,20 @@ async def mover_y_click(page: Page, selector: str, rapido: bool = False) -> None
     await elemento.click()
 
 
+async def click_directo(page: Page, selector: str) -> None:
+    """
+    Click sin curva de movimiento ni pausas: solo scrollea el elemento a la
+    vista y clickea. Usar UNICAMENTE para acciones dentro de una sesion ya
+    autenticada que reCAPTCHA no puntua (descarga de reporte/XML/PDF por
+    fila) — ahi el score de la sesion ya quedo establecido en el login y en
+    aplicar_filtros, asi que simular movimiento humano solo suma tiempo sin
+    ningun beneficio.
+    """
+    elemento = page.locator(selector)
+    await elemento.scroll_into_view_if_needed()
+    await elemento.click()
+
+
 async def acercarse_lento(page: Page, selector: str) -> None:
     """
     Mueve el mouse hacia el elemento con curva Bezier lenta y deliberada.

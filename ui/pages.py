@@ -6,8 +6,7 @@ Flujo: Login interno -> Credenciales SRI -> Configuracion consulta -> Progreso -
 
 import asyncio
 import logging
-import re
-import shutil
+from calendar import monthrange
 from datetime import datetime
 from pathlib import Path
 
@@ -43,6 +42,45 @@ TIPOS_COMPROBANTE = [
 ]
 _DICT_MESES = dict(MESES_OPCIONES)
 _DICT_TIPOS = dict(TIPOS_COMPROBANTE)
+
+
+def _validar_periodo(anio: str, mes: str, dia: str) -> str:
+    """
+    Valida el periodo antes de arrancar la corrida.
+
+    Se hace aca (y no despues de loguear en el SRI) porque una fecha futura o
+    inexistente nunca va a devolver comprobantes: abrir el navegador y loguear
+    solo para recibir "No existen datos" gasta tiempo y suma un login extra que
+    le baja el score a reCAPTCHA sin ninguna necesidad.
+
+    Devuelve el mensaje de error, o cadena vacia si el periodo es valido.
+    """
+    try:
+        a, m = int(anio), int(mes)
+        d = int(dia or 0)
+    except (TypeError, ValueError):
+        return "Seleccione un ano, mes y dia validos."
+
+    hoy = datetime.now()
+    nombre_mes = _DICT_MESES.get(str(m), str(m))
+
+    if (a, m) > (hoy.year, hoy.month):
+        return (
+            f"{nombre_mes} {a} todavia no ocurre. Seleccione un periodo hasta "
+            f"{_DICT_MESES.get(str(hoy.month), '')} {hoy.year}."
+        )
+
+    if d:
+        dias_del_mes = monthrange(a, m)[1]
+        if d > dias_del_mes:
+            return f"{nombre_mes} {a} solo tiene {dias_del_mes} dias. Corrija el dia seleccionado."
+        if (a, m, d) > (hoy.year, hoy.month, hoy.day):
+            return (
+                f"El {d} de {nombre_mes} de {a} todavia no llega. "
+                "Seleccione una fecha pasada o use el dia \"Todos\"."
+            )
+
+    return ""
 
 _orquestador_activo: ScrapingOrchestrator | None = None
 
@@ -200,11 +238,22 @@ async def pagina_login():
                 s["paso"] = 2
                 ui.navigate.to("/credenciales-sri")
 
+            def entrar_como_invitado():
+                s["autenticado"] = True
+                s["codigo_colaborador"] = "INVITADO"
+                s["nombre_usuario_banco"] = "INVITADO"
+                s["nombre_completo_colaborador"] = "Invitado"
+                s["paso"] = 2
+                ui.navigate.to("/credenciales-sri")
+
             codigo_input.on("keydown.enter", hacer_login)
             usuario_input.on("keydown.enter", hacer_login)
 
             ui.element("div").style("margin-top:24px;")
             btn_ingresar = btn_primario("Ingresar", on_click=hacer_login, ancho_completo=True)
+
+            ui.element("div").style("margin-top:10px;")
+            btn_secundario("Ingresar como invitado", on_click=entrar_como_invitado).style("width:100%;")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -298,56 +347,6 @@ async def pagina_credenciales_sri():
                 """Retorna mensaje de error o cadena vacia si es valido."""
                 if not ruc:
                     return "El RUC o cedula es obligatorio."
-                if not re.match(r"^\d{10}$|^\d{13}$", ruc):
-                    return "Debe tener 10 digitos (cedula) o 13 digitos (RUC)."
-
-                provincia = int(ruc[:2])
-                if not (1 <= provincia <= 24):
-                    return "Codigo de provincia invalido (primeros 2 digitos)."
-
-                tercer = int(ruc[2])
-
-                if tercer < 6:
-                    # Persona natural: modulo 10 sobre primeros 10 digitos
-                    base = ruc[:10]
-                    coefs = [2, 1, 2, 1, 2, 1, 2, 1, 2]
-                    total = sum(
-                        (d - 9 if d >= 10 else d)
-                        for d in (c * int(n) for c, n in zip(coefs, base[:9]))
-                    )
-                    verificador = (10 - (total % 10)) % 10
-                    if verificador != int(base[9]):
-                        return "El numero de cedula o RUC no es valido (digito verificador incorrecto)."
-                    if len(ruc) == 13 and ruc[10:] == "000":
-                        return "El codigo de establecimiento del RUC no puede ser 000."
-
-                elif tercer == 6:
-                    # Entidad publica: modulo 11 sobre primeros 8 digitos
-                    coefs = [3, 2, 7, 6, 5, 4, 3, 2]
-                    total = sum(c * int(n) for c, n in zip(coefs, ruc[:8]))
-                    verificador = 11 - (total % 11)
-                    if verificador in (10, 11):
-                        verificador = 0
-                    if len(ruc) != 13:
-                        return "RUC de entidad publica debe tener 13 digitos."
-                    if verificador != int(ruc[8]):
-                        return "El RUC de entidad publica no es valido (digito verificador incorrecto)."
-
-                elif tercer == 9:
-                    # Sociedad privada / extranjero: modulo 11 sobre primeros 9 digitos
-                    coefs = [4, 3, 2, 7, 6, 5, 4, 3, 2]
-                    total = sum(c * int(n) for c, n in zip(coefs, ruc[:9]))
-                    verificador = 11 - (total % 11)
-                    if verificador in (10, 11):
-                        verificador = 0
-                    if len(ruc) != 13:
-                        return "RUC de sociedad debe tener 13 digitos."
-                    if verificador != int(ruc[9]):
-                        return "El RUC de sociedad no es valido (digito verificador incorrecto)."
-
-                else:
-                    return "El tercer digito del RUC no es valido."
-
                 return ""
 
             def validar_y_continuar():
@@ -468,6 +467,7 @@ async def pagina_configuracion():
                         .style("width:100%;")
                     )
             lbl_err_tipo = _lbl_error()
+            lbl_err_periodo = _lbl_error()
 
             ui.label(
                 "Puede seleccionar mas de un tipo (por ejemplo Factura y Comprobante de "
@@ -487,9 +487,16 @@ async def pagina_configuracion():
 
             def iniciar_descarga():
                 lbl_err_tipo.set_text("")
+                lbl_err_periodo.set_text("")
                 tipos = tipo_sel.value or []
                 if not tipos:
                     lbl_err_tipo.set_text("Seleccione al menos un tipo de comprobante.")
+                    return
+
+                error_periodo = _validar_periodo(anio_sel.value, mes_sel.value, dia_sel.value)
+                if error_periodo:
+                    lbl_err_periodo.set_text(error_periodo)
+                    ui.notify(error_periodo, type="warning", position="top")
                     return
 
                 s["anio"] = anio_sel.value
@@ -825,8 +832,7 @@ async def pagina_resultado():
                         f"font-size:15px; font-weight:700; color:{GRIS_OSCURO}; display:block; margin-bottom:6px;"
                     )
                     ui.label(
-                        "Los archivos estan disponibles en la carpeta temporal de descarga. "
-                        "Puede copiarlos a una ubicacion de su eleccion."
+                        "Descargue un ZIP con todos los comprobantes de esta sesion a su equipo."
                     ).style(
                         f"font-size:13px; color:{GRIS_MEDIO}; display:block; margin-bottom:14px; line-height:1.5;"
                     )
@@ -836,49 +842,21 @@ async def pagina_resultado():
                     )
 
                     async def guardar_en_equipo():
-                        notif_guardar.set_text("Abriendo selector de carpeta...")
+                        # Genera el ZIP en el servidor y lo transmite via el navegador
+                        # (ui.download) para que llegue realmente al equipo del usuario.
+                        # Un selector de carpeta nativo (tkinter) NO sirve aqui: correria
+                        # en el servidor donde vive el proceso de NiceGUI, no en la
+                        # maquina del usuario que abre la pagina desde su navegador.
+                        notif_guardar.set_text("Generando archivo ZIP...")
                         notif_guardar.style(f"color:{GRIS_MEDIO};")
-
-                        def _pedir_carpeta():
-                            import tkinter as tk
-                            from tkinter import filedialog
-                            root = tk.Tk()
-                            root.withdraw()
-                            root.wm_attributes("-topmost", True)
-                            ruta = filedialog.askdirectory(
-                                title="Seleccionar carpeta de destino",
-                                mustexist=True,
-                            )
-                            root.destroy()
-                            return ruta
-
-                        destino = await asyncio.to_thread(_pedir_carpeta)
-
-                        if not destino:
-                            notif_guardar.set_text("Operacion cancelada.")
-                            notif_guardar.style(f"color:{GRIS_MEDIO};")
-                            return
-
                         try:
-                            origen = Path(carpeta_descarga)
-                            destino_path = Path(destino) / origen.name
-                            # rglob en vez de iterdir: cuando se piden varios tipos de
-                            # comprobante, los archivos quedan en subcarpetas por tipo
-                            # (ver storage/file_manager.py) y hay que copiarlas tambien.
-                            copiados = 0
-                            for archivo in origen.rglob("*"):
-                                if archivo.is_file():
-                                    relativo = archivo.relative_to(origen)
-                                    destino_archivo = destino_path / relativo
-                                    destino_archivo.parent.mkdir(parents=True, exist_ok=True)
-                                    shutil.copy2(archivo, destino_archivo)
-                                    copiados += 1
-                            notif_guardar.set_text(
-                                f"{copiados} archivo{'s' if copiados != 1 else ''} copiado{'s' if copiados != 1 else ''} a: {destino_path}"
-                            )
+                            contenido = await asyncio.to_thread(_generar_zip_carpeta, carpeta_descarga)
+                            nombre_zip = f"{Path(carpeta_descarga).name}.zip"
+                            ui.download(contenido, nombre_zip)
+                            notif_guardar.set_text(f"Descarga iniciada: {nombre_zip}")
                             notif_guardar.style(f"color:{SUCCESS_COLOR};")
                         except Exception as exc:
-                            notif_guardar.set_text(f"Error al copiar archivos: {exc}")
+                            notif_guardar.set_text(f"Error al generar el archivo: {exc}")
                             notif_guardar.style(f"color:{ERROR_COLOR};")
 
                     btn_primario("Guardar en mi equipo", on_click=guardar_en_equipo)
