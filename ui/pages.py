@@ -36,10 +36,10 @@ MESES_OPCIONES = [
 DIAS_OPCIONES = [("0", "Todos")] + [(str(d), str(d)) for d in range(1, 32)]
 TIPOS_COMPROBANTE = [
     ("1", "Factura"),
-    ("2", "Liquidacion de compra de bienes y prestacion de servicios"),
-    ("3", "Nota de Credito"),
-    ("4", "Nota de Debito"),
-    ("6", "Comprobante de Retencion"),
+    ("2", "Liquidación de compra de bienes y prestación de servicios"),
+    ("3", "Nota de Crédito"),
+    ("4", "Nota de Débito"),
+    ("6", "Comprobante de Retención"),
 ]
 _DICT_MESES = dict(MESES_OPCIONES)
 _DICT_TIPOS = dict(TIPOS_COMPROBANTE)
@@ -60,25 +60,25 @@ def _validar_periodo(anio: str, mes: str, dia: str) -> str:
         a, m = int(anio), int(mes)
         d = int(dia or 0)
     except (TypeError, ValueError):
-        return "Seleccione un ano, mes y dia validos."
+        return "Seleccione un año, mes y día válidos."
 
     hoy = datetime.now()
     nombre_mes = _DICT_MESES.get(str(m), str(m))
 
     if (a, m) > (hoy.year, hoy.month):
         return (
-            f"{nombre_mes} {a} todavia no ocurre. Seleccione un periodo hasta "
+            f"{nombre_mes} {a} todavía no ocurre. Seleccione un período hasta "
             f"{_DICT_MESES.get(str(hoy.month), '')} {hoy.year}."
         )
 
     if d:
         dias_del_mes = monthrange(a, m)[1]
         if d > dias_del_mes:
-            return f"{nombre_mes} {a} solo tiene {dias_del_mes} dias. Corrija el dia seleccionado."
+            return f"{nombre_mes} {a} solo tiene {dias_del_mes} días. Corrija el día seleccionado."
         if (a, m, d) > (hoy.year, hoy.month, hoy.day):
             return (
-                f"El {d} de {nombre_mes} de {a} todavia no llega. "
-                "Seleccione una fecha pasada o use el dia \"Todos\"."
+                f"El {d} de {nombre_mes} de {a} todavía no llega. "
+                "Seleccione una fecha pasada o use el día \"Todos\"."
             )
 
     return ""
@@ -185,7 +185,7 @@ async def pagina_login():
             _subtitulo("Ingrese sus credenciales de colaborador Banco Guayaquil")
             divider()
 
-            _label_campo("Codigo de trabajador")
+            _label_campo("Código de trabajador")
             codigo_input = (
                 ui.input(placeholder="Ej: 10000")
                 .props("outlined dense")
@@ -218,7 +218,11 @@ async def pagina_login():
 
                 ok, msg = validar_formato(codigo, usuario)
                 if not ok:
-                    if "codigo" in msg.lower() or "numerico" in msg.lower():
+                    # "trabajador" en vez de "codigo": el mensaje real ahora lleva
+                    # tilde ("código"), y comparar contra una palabra sin tilde
+                    # que solo aparece en los mensajes de codigo (no en los de
+                    # usuario) evita que la tilde rompa esta deteccion.
+                    if "trabajador" in msg.lower():
                         lbl_err_codigo.set_text(msg)
                     else:
                         lbl_err_usuario.set_text(msg)
@@ -290,7 +294,7 @@ async def pagina_credenciales_sri():
                 )
 
             _subtitulo(
-                "Ingrese las credenciales del portal SRI en linea del contribuyente. "
+                "Ingrese las credenciales del portal SRI en línea del contribuyente. "
                 "Estos datos no se almacenan en disco."
             )
 
@@ -301,25 +305,25 @@ async def pagina_credenciales_sri():
             ):
                 ui.label(
                     "El SRI bloquea la cuenta tras varios intentos fallidos. "
-                    "Verifique bien su clave antes de continuar — se le pedira confirmarla."
+                    "Verifique bien su clave antes de continuar — se le pedirá confirmarla."
                 ).style(
                     f"font-size:13px; color:#92400E; font-family:'Inter',sans-serif; line-height:1.5;"
                 )
 
             divider()
 
-            _label_campo("RUC o Cedula")
+            _label_campo("RUC o Cédula")
             ruc_input = (
-                ui.input(placeholder="13 digitos RUC / 10 digitos cedula")
+                ui.input(placeholder="13 dígitos RUC / 10 dígitos cédula")
                 .props("outlined dense")
                 .style("width:100%;")
             )
             lbl_err_ruc = _lbl_error()
 
             _input_separador()
-            _label_campo("Cedula adicional (opcional)")
+            _label_campo("Cédula adicional (opcional)")
             ci_adicional_input = (
-                ui.input(placeholder="10 digitos - solo si el contribuyente le dio acceso delegado")
+                ui.input(placeholder="10 dígitos - solo si el contribuyente le dio acceso delegado")
                 .props("outlined dense maxlength=10")
                 .style("width:100%;")
             )
@@ -329,7 +333,7 @@ async def pagina_credenciales_sri():
             lbl_err_ci_adicional = _lbl_error()
 
             _input_separador()
-            _label_campo("Contrasena SRI")
+            _label_campo("Contraseña SRI")
             pass_input = (
                 ui.input(password=True, placeholder="Clave SRI")
                 .props("outlined dense")
@@ -338,7 +342,7 @@ async def pagina_credenciales_sri():
             lbl_err_pass = _lbl_error()
 
             _input_separador()
-            _label_campo("Confirmar contrasena SRI")
+            _label_campo("Confirmar contraseña SRI")
             pass_confirm_input = (
                 ui.input(password=True, placeholder="Repita su clave SRI")
                 .props("outlined dense")
@@ -351,7 +355,7 @@ async def pagina_credenciales_sri():
                 pass_input.props(tipo)
                 pass_confirm_input.props(tipo)
 
-            ui.checkbox("Mostrar contrasenas", on_change=toggle_password).style(
+            ui.checkbox("Mostrar contraseñas", on_change=toggle_password).style(
                 f"font-size:12px; color:{GRIS_MEDIO}; margin-top:6px;"
             )
 
@@ -363,14 +367,14 @@ async def pagina_credenciales_sri():
             def _validar_ruc(ruc: str) -> str:
                 """Retorna mensaje de error o cadena vacia si es valido."""
                 if not ruc:
-                    return "El RUC o cedula es obligatorio."
+                    return "El RUC o cédula es obligatorio."
                 return ""
 
             def _validar_ci_adicional(ci: str) -> str:
                 if not ci:
                     return ""
                 if not re.match(r"^\d{10}$", ci):
-                    return "La cedula adicional debe tener 10 digitos numericos."
+                    return "La cédula adicional debe tener 10 dígitos numéricos."
                 return ""
 
             def validar_y_continuar():
@@ -396,17 +400,17 @@ async def pagina_credenciales_sri():
                     return
 
                 if not pwd:
-                    lbl_err_pass.set_text("La contrasena es obligatoria.")
+                    lbl_err_pass.set_text("La contraseña es obligatoria.")
                     return
                 if len(pwd) < 6:
-                    lbl_err_pass.set_text("La contrasena debe tener al menos 6 caracteres.")
+                    lbl_err_pass.set_text("La contraseña debe tener al menos 6 caracteres.")
                     return
 
                 if not pwd_confirm:
-                    lbl_err_confirm.set_text("Por favor confirme su contrasena.")
+                    lbl_err_confirm.set_text("Por favor confirme su contraseña.")
                     return
                 if pwd != pwd_confirm:
-                    lbl_err_confirm.set_text("Las contrasenas no coinciden. Verifique e intente de nuevo.")
+                    lbl_err_confirm.set_text("Las contraseñas no coinciden. Verifique e intente de nuevo.")
                     pass_confirm_input.value = ""
                     return
 
@@ -422,7 +426,7 @@ async def pagina_credenciales_sri():
             pass_confirm_input.on("keydown.enter", validar_y_continuar)
 
             with ui.element("div").style("display:flex; gap:10px; margin-top:24px;"):
-                btn_secundario("Atras", on_click=lambda: ui.navigate.to("/"))
+                btn_secundario("Atrás", on_click=lambda: ui.navigate.to("/"))
                 btn_primario("Continuar", on_click=validar_y_continuar).style("flex:1;")
 
 
@@ -446,17 +450,17 @@ async def pagina_configuracion():
     with centrar_contenido():
         with _card("540px"):
             stepper(3)
-            _titulo("Configuracion de consulta")
+            _titulo("Configuración de consulta")
             _subtitulo(
-                f"RUC/Cedula: {s.get('sri_ruc', '')}  —  "
-                "Define el periodo y tipo de comprobante a descargar."
+                f"RUC/Cédula: {s.get('sri_ruc', '')}  —  "
+                "Define el período y tipo de comprobante a descargar."
             )
             divider()
 
-            # Ano / Mes
+            # Año / Mes
             with ui.element("div").style("display:flex; gap:16px;"):
                 with ui.element("div").style("flex:1;"):
-                    _label_campo("Ano")
+                    _label_campo("Año")
                     anio_sel = (
                         ui.select(options=ANIOS, value=s.get("anio", str(datetime.now().year)))
                         .props("outlined dense")
@@ -475,10 +479,10 @@ async def pagina_configuracion():
 
             ui.element("div").style("margin-top:16px;")
 
-            # Dia / Tipo
+            # Día / Tipo
             with ui.element("div").style("display:flex; gap:16px;"):
                 with ui.element("div").style("flex:0 0 110px;"):
-                    _label_campo("Dia")
+                    _label_campo("Día")
                     dia_sel = (
                         ui.select(
                             options={v: l for v, l in DIAS_OPCIONES},
@@ -503,9 +507,9 @@ async def pagina_configuracion():
             lbl_err_periodo = _lbl_error()
 
             ui.label(
-                "Puede seleccionar mas de un tipo (por ejemplo Factura y Comprobante de "
-                "Retencion): se descargaran uno tras otro, en una sola corrida, para el "
-                "mismo RUC y periodo."
+                "Puede seleccionar más de un tipo (por ejemplo Factura y Comprobante de "
+                "Retención): se descargarán uno tras otro, en una sola corrida, para el "
+                "mismo RUC y período."
             ).style(f"font-size:12px; color:{GRIS_MEDIO}; margin-top:4px; line-height:1.5;")
 
             ui.element("div").style("margin-top:20px;")
@@ -514,8 +518,8 @@ async def pagina_configuracion():
                 f"border-radius:4px; padding:12px 14px;"
             ):
                 ui.label(
-                    "El proceso descargara automaticamente el reporte del periodo y los archivos "
-                    "XML y PDF de cada comprobante. Si hay mas de una pagina se procesaran todas."
+                    "El proceso descargará automáticamente el reporte del período y los archivos "
+                    "XML y PDF de cada comprobante. Si hay más de una página se procesarán todas."
                 ).style(f"font-size:12px; color:{GRIS_MEDIO}; line-height:1.5;")
 
             def iniciar_descarga():
@@ -550,7 +554,7 @@ async def pagina_configuracion():
                 ui.navigate.to("/descarga")
 
             with ui.element("div").style("display:flex; gap:10px; margin-top:24px;"):
-                btn_secundario("Atras", on_click=lambda: ui.navigate.to("/credenciales-sri"))
+                btn_secundario("Atrás", on_click=lambda: ui.navigate.to("/credenciales-sri"))
                 btn_primario("Iniciar descarga", on_click=iniciar_descarga).style("flex:1;")
 
 
@@ -578,7 +582,7 @@ async def pagina_descarga():
             _tipos_nombres = ", ".join(_DICT_TIPOS.get(t, t) for t in _tipos_sel)
             _subtitulo(
                 f"RUC: {s.get('sri_ruc', '')}  |  "
-                f"Periodo: {_DICT_MESES.get(s.get('mes',''), '')} {s.get('anio', '')}  |  "
+                f"Período: {_DICT_MESES.get(s.get('mes',''), '')} {s.get('anio', '')}  |  "
                 f"Tipo(s): {_tipos_nombres}"
             )
             divider()
@@ -798,16 +802,16 @@ async def pagina_resultado():
 
             elif not completados:
                 _titulo("Sin resultados")
-                _subtitulo("No se encontraron comprobantes para el periodo y tipo seleccionados.")
+                _subtitulo("No se encontraron comprobantes para el período y tipo seleccionados.")
                 with ui.element("div").style(
                     "background:#FFF3CD; border:1px solid #E6C466; border-radius:8px; "
                     "padding:14px 16px; margin-top:12px; margin-bottom:4px;"
                 ):
-                    ui.label("¿Deseas intentar con otro mes, dia o tipo de comprobante?").style(
+                    ui.label("¿Deseas intentar con otro mes, día o tipo de comprobante?").style(
                         f"font-size:13px; color:{GRIS_OSCURO}; display:block; margin-bottom:10px; font-weight:600;"
                     )
                     with ui.element("div").style("display:flex; gap:10px; flex-wrap:wrap;"):
-                        btn_primario("Buscar otro periodo", on_click=nueva_consulta)
+                        btn_primario("Buscar otro período", on_click=nueva_consulta)
                         btn_secundario("Probar con otro RUC", on_click=otro_ruc)
 
             elif nuevos_descargados == 0:
@@ -820,12 +824,12 @@ async def pagina_resultado():
                     "background:#EAF6EE; border:1px solid #A3D9B1; border-radius:4px; "
                     "padding:18px; margin-bottom:16px; text-align:center;"
                 ):
-                    ui.label("Ya esta todo al dia").style(
+                    ui.label("Ya está todo al día").style(
                         f"font-size:18px; font-weight:700; color:{SUCCESS_COLOR}; display:block;"
                     )
                     ui.label(
                         f"Se revisaron {completados} comprobante{'s' if completados != 1 else ''} "
-                        f"de este periodo y ya estaban descargados. No hay nada nuevo."
+                        f"de este período y ya estaban descargados. No hay nada nuevo."
                     ).style(
                         f"font-size:14px; color:{SUCCESS_COLOR}; margin-top:6px; display:block;"
                     )
@@ -891,7 +895,7 @@ async def pagina_resultado():
                         f"font-size:15px; font-weight:700; color:{GRIS_OSCURO}; display:block; margin-bottom:6px;"
                     )
                     ui.label(
-                        "Descargue un ZIP con todos los comprobantes de esta sesion a su equipo."
+                        "Descargue un ZIP con todos los comprobantes de esta sesión a su equipo."
                     ).style(
                         f"font-size:13px; color:{GRIS_MEDIO}; display:block; margin-bottom:6px; line-height:1.5;"
                     )
@@ -903,10 +907,10 @@ async def pagina_resultado():
                     # el sistema usa para recordar, y borrar la carpeta del servidor
                     # pensando que ya no hace falta.
                     ui.label(
-                        "Los comprobantes ya quedaron guardados automaticamente en el "
-                        "sistema. Este boton solo genera una copia adicional para su "
+                        "Los comprobantes ya quedaron guardados automáticamente en el "
+                        "sistema. Este botón solo genera una copia adicional para su "
                         "equipo; no borre la carpeta original del servidor, ya que de "
-                        "ahi depende que no se vuelvan a descargar la proxima vez."
+                        "ahí depende que no se vuelvan a descargar la próxima vez."
                     ).style(
                         f"font-size:12px; color:{GRIS_MEDIO}; font-style:italic; "
                         f"display:block; margin-bottom:14px; line-height:1.5;"
@@ -1027,7 +1031,7 @@ async def pagina_historial():
                 ):
                     ui.label(
                         "BASE DE DATOS NO CONECTADA — AUTH_BYPASS_MODE activo. "
-                        "El historial estara disponible cuando se conecte SQL Server."
+                        "El historial estará disponible cuando se conecte SQL Server."
                     ).style(f"font-size:13px; color:{GRIS_OSCURO};")
 
             # Filtro por RUC y acciones
@@ -1087,7 +1091,7 @@ async def _cargar_tabla(contenedor, ruc_filtro: str, codigo_colaborador: str, by
                     with ui.element("tr").style(
                         f"background:{GRIS_OSCURO}; border-bottom:2px solid {BORDER_COLOR};"
                     ):
-                        for col in ["Fecha", "RUC", "Periodo", "Tipo", "Encontrados", "Descargados", "Errores", "Estado", "Colaborador", "Archivos"]:
+                        for col in ["Fecha", "RUC", "Período", "Tipo", "Encontrados", "Descargados", "Errores", "Estado", "Colaborador", "Archivos"]:
                             with ui.element("th").style(
                                 f"padding:13px 16px; text-align:left; font-weight:600; "
                                 f"color:{BLANCO}; white-space:nowrap; font-family:'Inter',sans-serif; "
@@ -1273,7 +1277,7 @@ def _generar_excel(filas: list[dict]) -> bytes:
     ws = wb.active
     ws.title = "Historial SRI"
 
-    headers = ["Fecha", "RUC", "Anio", "Mes", "Tipo", "Encontrados", "Descargados", "Errores", "Estado", "Colaborador", "Carpeta destino"]
+    headers = ["Fecha", "RUC", "Año", "Mes", "Tipo", "Encontrados", "Descargados", "Errores", "Estado", "Colaborador", "Carpeta destino"]
     header_font = Font(bold=True, color="FFFFFF")
     header_fill = PatternFill("solid", fgColor="160F41")
 

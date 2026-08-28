@@ -79,9 +79,14 @@ def header():
             if _nicegui_app.storage.user.get("autenticado"):
                 # En modo bypass no hay BD real conectada, asi que no existe
                 # historial que consultar (T_COMPROBANTES_SRI nunca se inserta,
-                # solo se loguea). Mostrar el link ahi solo lleva a una pagina
-                # vacia explicando que no hay conexion — mejor no mostrarlo.
-                if not settings.AUTH_BYPASS_MODE:
+                # solo se loguea). Lo mismo aplica a una sesion de "invitado":
+                # ese login usa el codigo literal "INVITADO", que nunca va a
+                # coincidir con ningun registro real de la BD (independiente
+                # de si AUTH_BYPASS_MODE esta activo o no). En ambos casos
+                # mostrar el link solo lleva a una pagina vacia -- mejor no
+                # mostrarlo.
+                es_invitado = _nicegui_app.storage.user.get("codigo_colaborador") == "INVITADO"
+                if not settings.AUTH_BYPASS_MODE and not es_invitado:
                     ui.link("Historial", "/historial").style(
                         f"font-size:13px; font-weight:600; color:{MAGENTA}; "
                         f"font-family:'Inter',sans-serif; text-decoration:none; "
@@ -94,7 +99,7 @@ def header():
                     for k in list(_nicegui_app.storage.user.keys()):
                         del _nicegui_app.storage.user[k]
                     ui.navigate.to("/")
-                ui.button("Cerrar sesion", on_click=_cerrar_sesion).style(
+                ui.button("Cerrar sesión", on_click=_cerrar_sesion).style(
                     f"font-family:'Inter',sans-serif !important; font-weight:600 !important; "
                     f"text-transform:none !important; font-size:13px !important; "
                     f"background:{MAGENTA} !important; color:{BLANCO} !important; "
@@ -118,7 +123,7 @@ def centrar_contenido():
 # ── Stepper ───────────────────────────────────────────────────────────────────
 
 def stepper(paso_actual: int):
-    pasos = ["Acceso", "Credenciales", "Configuracion", "Descarga", "Resultado"]
+    pasos = ["Acceso", "Credenciales", "Configuración", "Descarga", "Resultado"]
 
     with ui.element("div").style("width:100%; margin-bottom:36px;"):
         with ui.element("div").style("display:flex; align-items:flex-start; width:100%;"):
@@ -205,7 +210,7 @@ def panel_intervencion(mensaje: str, on_resolver, on_cancelar):
             ui.element("div").style(
                 f"width:8px; height:8px; border-radius:50%; background:#F59E0B; flex-shrink:0;"
             )
-            ui.label("Verificacion requerida").style(
+            ui.label("Verificación requerida").style(
                 f"font-size:15px; font-weight:700; color:{NAVY}; "
                 f"font-family:'Inter',sans-serif;"
             )
@@ -213,7 +218,7 @@ def panel_intervencion(mensaje: str, on_resolver, on_cancelar):
             f"font-size:14px; color:{NAVY}; margin-bottom:6px; "
             f"font-family:'Inter',sans-serif; line-height:1.5;"
         )
-        ui.label("Resuelva la verificacion en la ventana del navegador y presione Continuar.").style(
+        ui.label("Resuelva la verificación en la ventana del navegador y presione Continuar.").style(
             f"font-size:13px; color:{NAVY_MED}; margin-bottom:18px; "
             f"font-family:'Inter',sans-serif;"
         )
@@ -250,7 +255,7 @@ def panel_errores(errores: list[str]):
                 ):
                     ui.label(e)
             if len(errores) > 20:
-                ui.label(f"... y {len(errores) - 20} mas.").style(
+                ui.label(f"... y {len(errores) - 20} más.").style(
                     f"font-size:12px; color:{NAVY_MED}; margin-top:6px; padding:0 2px; "
                     f"display:block; font-family:'Inter',sans-serif;"
                 )

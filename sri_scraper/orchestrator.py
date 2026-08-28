@@ -181,11 +181,11 @@ class ScrapingOrchestrator:
             # entre en estado "hidden" (document.visibilityState/rAF pausado), que
             # reCAPTCHA Enterprise usa como senal de comportamiento no humano.
 
-            await self._notificar("Autenticando en SRI en linea")
+            await self._notificar("Autenticando en SRI en línea")
 
             async def _progreso_login(intento: int, total: int) -> None:
                 if intento == 1:
-                    await self._notificar("Autenticando en SRI en linea")
+                    await self._notificar("Autenticando en SRI en línea")
                 else:
                     await self._notificar(
                         f"reCAPTCHA no resuelto - reintentando ({intento}/{total})"
@@ -201,7 +201,7 @@ class ScrapingOrchestrator:
             except ErrorRecaptcha as e:
                 self._estado.errores.append(str(e))
                 self._estado.finalizado = True
-                await self._notificar("No se pudo verificar el acceso automaticamente")
+                await self._notificar("No se pudo verificar el acceso automáticamente")
                 return self._estado
 
             except ErrorCredenciales as e:
@@ -213,7 +213,7 @@ class ScrapingOrchestrator:
             except ErrorLoginTimeout as e:
                 self._estado.errores.append(str(e))
                 self._estado.finalizado = True
-                await self._notificar("Error de conexion")
+                await self._notificar("Error de conexión")
                 return self._estado
 
             if self._cancelar:
@@ -222,7 +222,7 @@ class ScrapingOrchestrator:
             # --- Fase 1.5: Warm-up de sesion (una sola vez) ---
             # Visitar el perfil del SRI antes de ir a comprobantes.
             # Google ve actividad humana real en la sesion y sube el score reCAPTCHA.
-            await self._notificar("Preparando sesion")
+            await self._notificar("Preparando sesión")
             await self._calentar_sesion(page)
 
             if self._cancelar:
@@ -231,7 +231,7 @@ class ScrapingOrchestrator:
             # --- Fase 2: Navegacion al formulario de comprobantes (una sola vez) ---
             # navegar_a_comprobantes ya reintenta internamente el flujo de
             # redireccion/login de tuportal-internet varias veces (ver consulta.py).
-            await self._notificar("Navegando a comprobantes electronicos")
+            await self._notificar("Navegando a comprobantes electrónicos")
             await navegar_a_comprobantes(page, ruc=p.ruc, password=p.password)
 
             if self._cancelar:
@@ -316,7 +316,7 @@ class ScrapingOrchestrator:
                                 tipo, intento_filtros, MAX_INTENTOS_FILTROS, e,
                             )
                             await _notificar_tipo(
-                                f"Verificacion no superada - reintentando ({intento_filtros}/{MAX_INTENTOS_FILTROS})"
+                                f"Verificación no superada - reintentando ({intento_filtros}/{MAX_INTENTOS_FILTROS})"
                             )
                             await pausa(5000, 9000)
                             await navegar_a_comprobantes(page, p.ruc, p.password)
@@ -343,7 +343,7 @@ class ScrapingOrchestrator:
                     break
 
                 # --- Descargar reporte del periodo (todos los tipos, incluidas retenciones) ---
-                await _notificar_tipo("Descargando reporte de periodo")
+                await _notificar_tipo("Descargando reporte de período")
                 ruta = str(ruta_reporte(p.ruc, p.anio, p.mes, subcarpeta))
                 ok = await descargar_reporte(page, ruta)
                 await _notificar_tipo("Reporte descargado" if ok else "Reporte no disponible")
@@ -381,7 +381,7 @@ class ScrapingOrchestrator:
                             break
 
                         await _notificar_tipo(
-                            f"Pagina {pag}/{n_paginas} - "
+                            f"Página {pag}/{n_paginas} - "
                             f"Descargando {completados_tipo + 1}/{total_tipo}: "
                             f"{fila.tipo_y_serie}"
                         )

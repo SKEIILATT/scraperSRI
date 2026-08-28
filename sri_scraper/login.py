@@ -105,7 +105,7 @@ async def login_sri(
         try:
             await page.wait_for_selector(f"a[href='{URL_PERFIL}']", timeout=TIMEOUT_ELEMENTO)
         except PlaywrightTimeout:
-            raise ErrorLoginTimeout("El menu del portal SRI no cargo. Verifique su conexion.")
+            raise ErrorLoginTimeout("El menú del portal SRI no cargó. Verifique su conexión.")
 
         await mover_y_click(page, f"a[href='{URL_PERFIL}']")
         await pausa(800, 1500)
@@ -114,7 +114,7 @@ async def login_sri(
         try:
             await page.wait_for_selector("#usuario", timeout=TIMEOUT_ELEMENTO)
         except PlaywrightTimeout:
-            raise ErrorLoginTimeout("El formulario de login del SRI no cargo en tiempo.")
+            raise ErrorLoginTimeout("El formulario de login del SRI no cargó en tiempo.")
 
         logger.info("Formulario Keycloak cargado en: %s", page.url)
 
@@ -207,14 +207,14 @@ async def login_sri(
             if intento < MAX_INTENTOS:
                 continue
             raise ErrorRecaptcha(
-                f"El SRI no completo el login tras {MAX_INTENTOS} intentos "
-                "(posible verificacion reCAPTCHA fallida)."
+                f"El SRI no completó el login tras {MAX_INTENTOS} intentos "
+                "(posible verificación reCAPTCHA fallida)."
             )
 
         # Sin redireccion, sin error y sin formulario visible: estado desconocido
         if intento < MAX_INTENTOS:
             continue
         raise ErrorLoginTimeout(
-            "El login del SRI no completo tras varios intentos. "
+            "El login del SRI no completó tras varios intentos. "
             "Verifique las credenciales e intente de nuevo."
         )

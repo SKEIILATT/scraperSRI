@@ -36,13 +36,13 @@ class Colaborador:
 def validar_formato(codigo: str, usuario: str) -> tuple[bool, str]:
     """Valida formato de los campos antes de consultar la base."""
     if not codigo or not codigo.strip():
-        return False, "El codigo de trabajador es obligatorio."
+        return False, "El código de trabajador es obligatorio."
     if not re.match(r"^\d+$", codigo.strip()):
-        return False, "El codigo de trabajador debe ser numerico."
+        return False, "El código de trabajador debe ser numérico."
     if not usuario or not usuario.strip():
         return False, "El nombre de usuario es obligatorio."
     if not re.match(r"^[a-zA-Z0-9]+$", usuario.strip()):
-        return False, "El nombre de usuario solo puede contener letras y numeros, sin espacios."
+        return False, "El nombre de usuario solo puede contener letras y números, sin espacios."
     return True, ""
 
 
@@ -87,14 +87,14 @@ def _validar_contra_base_real(codigo: str, usuario: str) -> tuple[bool, str, Col
 
     except ImportError:
         logger.error("pyodbc no esta instalado. Instalar con: pip install pyodbc")
-        return False, "Error de configuracion interna. Contacte al administrador.", None
+        return False, "Error de configuración interna. Contacte al administrador.", None
     except Exception as exc:
         logger.exception("Error consultando BD de colaboradores: %s", exc)
         return False, "No se pudo verificar el acceso. Intente nuevamente.", None
 
     if row is None:
         logger.warning("Codigo %s no encontrado en DW_DIM_COLABORADORES", codigo)
-        return False, "Codigo no encontrado en los datos de OGA.", None
+        return False, "Código no encontrado en los datos de OGA.", None
 
     db_codigo, db_usuario, db_centro_costo, db_nombre = row
     db_usuario = str(db_usuario).strip().upper()
@@ -104,7 +104,7 @@ def _validar_contra_base_real(codigo: str, usuario: str) -> tuple[bool, str, Col
             "Usuario %s no coincide con el registrado para codigo %s (esperado: %s)",
             usuario, codigo, db_usuario,
         )
-        return False, "Usuario incorrecto para el codigo ingresado.", None
+        return False, "Usuario incorrecto para el código ingresado.", None
 
     if settings.VERIFICAR_AREA:
         centro_costo = str(db_centro_costo or "").strip().upper()
@@ -114,7 +114,7 @@ def _validar_contra_base_real(codigo: str, usuario: str) -> tuple[bool, str, Col
                 "Usuario %s (%s) pertenece al centro de costo '%s', que no esta autorizado.",
                 db_usuario, codigo, centro_costo or "<vacio>",
             )
-            return False, "No estas autorizado.", None
+            return False, "No estás autorizado.", None
 
     colaborador = Colaborador(
         codigo=str(db_codigo).strip(),

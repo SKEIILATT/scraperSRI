@@ -51,10 +51,10 @@ def _frm(sufijo: str) -> str:
 
 TIPOS_COMPROBANTE = {
     "1": "Factura",
-    "2": "Liquidacion de compra",
-    "3": "Nota de Credito",
-    "4": "Nota de Debito",
-    "6": "Comprobante de Retencion",
+    "2": "Liquidación de compra",
+    "3": "Nota de Crédito",
+    "4": "Nota de Débito",
+    "6": "Comprobante de Retención",
 }
 
 
@@ -157,7 +157,7 @@ async def _verificar_error_captcha(page: Page) -> None:
                     # mensaje no debe prometer una accion que no existe; solo
                     # informa que el SRI rechazo la verificacion automatica.
                     raise ErrorCaptchaConsulta(
-                        "El SRI rechazo la verificacion automatica (reCAPTCHA) para este "
+                        "El SRI rechazó la verificación automática (reCAPTCHA) para este "
                         "tipo de comprobante tras varios reintentos. Puede deberse a un "
                         "bloqueo temporal — intente nuevamente en unos minutos."
                     )
@@ -305,7 +305,7 @@ async def navegar_a_comprobantes(
                 return
             await _tomar_screenshot_debug(page, "debug_comprobantes_sin_formulario.png")
             raise RuntimeError(
-                "La pagina de comprobantes cargo pero el formulario JSF no aparecio."
+                "La página de comprobantes cargó pero el formulario JSF no apareció."
             )
 
         # --- Caso B: Keycloak pide login para tuportal-internet ---
@@ -314,7 +314,7 @@ async def navegar_a_comprobantes(
 
             if not ruc or not password:
                 raise RuntimeError(
-                    "El portal SRI requiere autenticacion en tuportal-internet pero "
+                    "El portal SRI requiere autenticación en tuportal-internet pero "
                     "no se proporcionaron credenciales."
                 )
 
@@ -325,7 +325,7 @@ async def navegar_a_comprobantes(
                     continue
                 await _tomar_screenshot_debug(page, "debug_tuportal_login_fallo.png")
                 raise RuntimeError(
-                    f"Login tuportal-internet fallo tras {MAX_REINTENTOS} intentos."
+                    f"Login tuportal-internet falló tras {MAX_REINTENTOS} intentos."
                 )
 
             # Tras el login, el portal puede:
@@ -497,7 +497,7 @@ async def esperar_tabla(page: Page) -> None:
             pass
         mensaje_servidor = await _texto_mensajes_servidor(page)
         detalle = f" Mensaje del servidor: {mensaje_servidor}" if mensaje_servidor else ""
-        raise RuntimeError(f"La tabla de resultados no cargo despues de aplicar los filtros.{detalle}")
+        raise RuntimeError(f"La tabla de resultados no cargó después de aplicar los filtros.{detalle}")
 
     await pausa(500, 1000)
 

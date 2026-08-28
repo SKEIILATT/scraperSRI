@@ -155,7 +155,7 @@ async def _sincronizar_uno(ruc: str, anio: int, mes: int, tipo: str) -> None:
     if nuevos > 0:
         from storage.notificaciones import notificar
         notificar(
-            "Sincronizacion nocturna",
+            "Sincronización nocturna",
             f"{nuevos} comprobante{'s' if nuevos != 1 else ''} nuevo{'s' if nuevos != 1 else ''} "
             f"para RUC {ruc} ({mes:02d}/{anio})",
         )
