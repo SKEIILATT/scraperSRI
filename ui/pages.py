@@ -325,7 +325,7 @@ async def pagina_credenciales_sri():
             )
             ui.label(
                 "Dejar en blanco si va a ingresar con el RUC y clave originales del contribuyente."
-            ).style(f"font-size:11px; color:{GRIS_MEDIO}; margin-top:4px; display:block;")
+            ).style(f"font-size:12px; color:{GRIS_MEDIO}; margin-top:4px; display:block;")
             lbl_err_ci_adicional = _lbl_error()
 
             _input_separador()
@@ -840,6 +840,56 @@ async def pagina_resultado():
                         )
                         ui.label(f"{detalle_nuevos}  |  {detalle_previos}").style(
                             f"font-size:12px; color:{GRIS_MEDIO}; margin-top:4px; display:block;"
+                        )
+
+            # Guardar credenciales para sincronizacion automatica nocturna: en su
+            # propia tarjeta (mismo patron visual que "Guardar archivos" mas abajo)
+            # en vez de un checkbox suelto sin contenedor.
+            if completados > 0:
+                ruc_sync = s.get("sri_ruc", "")
+                pwd_sync = s.get("sri_password", "")
+                ci_sync = s.get("sri_ci_adicional", "")
+                if ruc_sync and pwd_sync:
+                    from storage.credentials import guardar as _guardar_cred, tiene_credenciales as _tiene_cred
+                    ya_guardadas = _tiene_cred(ruc_sync)
+                    with ui.element("div").style(
+                        f"background:{FONDO}; border:1px solid {BORDER_COLOR}; border-radius:10px; "
+                        f"padding:18px 20px; margin-bottom:20px; width:100%;"
+                    ):
+                        ui.label("Sincronizacion automatica nocturna").style(
+                            f"font-size:15px; font-weight:700; color:{GRIS_OSCURO}; "
+                            f"display:block; margin-bottom:6px;"
+                        )
+                        ui.label(
+                            "Guarde las credenciales de este RUC para que el proceso "
+                            "nocturno revise automaticamente si aparecen comprobantes "
+                            "nuevos, sin tener que volver a ingresarlas cada vez."
+                        ).style(
+                            f"font-size:13px; color:{GRIS_MEDIO}; display:block; "
+                            f"margin-bottom:12px; line-height:1.5;"
+                        )
+
+                        lbl_cred = ui.label(
+                            "Credenciales ya guardadas para sincronizacion automatica." if ya_guardadas
+                            else ""
+                        ).style(f"font-size:12px; color:{SUCCESS_COLOR}; display:block; margin-bottom:6px;")
+
+                        def _toggle_guardar_cred(e):
+                            if e.value:
+                                try:
+                                    _guardar_cred(ruc_sync, pwd_sync, ci_sync)
+                                    lbl_cred.set_text("Credenciales guardadas correctamente.")
+                                    lbl_cred.style(f"font-size:12px; color:{SUCCESS_COLOR}; display:block; margin-bottom:6px;")
+                                except Exception as exc:
+                                    lbl_cred.set_text(f"No se pudieron guardar: {exc}")
+                                    lbl_cred.style(f"font-size:12px; color:{ERROR_COLOR}; display:block; margin-bottom:6px;")
+
+                        ui.checkbox(
+                            "Guardar credenciales para la sincronizacion nocturna",
+                            value=ya_guardadas,
+                            on_change=_toggle_guardar_cred,
+                        ).style(
+                            f"font-size:13px; color:{GRIS_OSCURO}; font-family:'Inter',sans-serif;"
                         )
 
             divider()

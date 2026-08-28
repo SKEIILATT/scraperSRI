@@ -422,15 +422,17 @@ class ScrapingOrchestrator:
                             self._estado.errores.append(msg)
 
                         # Un comprobante es "nuevo" si al menos uno de sus dos
-                        # archivos no existia antes de esta corrida. Se guardan
-                        # las rutas de ambos (si quedaron en disco) para poder
-                        # ofrecer despues un ZIP con unicamente lo nuevo.
+                        # archivos no existia antes de esta corrida. Solo se
+                        # agrega al ZIP de "solo lo nuevo" el archivo que
+                        # realmente se bajo en esta corrida -- el que ya
+                        # existia de antes no se incluye, para no reempacar
+                        # algo que el usuario ya tiene de una sesion previa.
                         if xml_ya_existia and pdf_ya_existia:
                             self._estado.ya_existian += 1
                         else:
                             self._estado.nuevos_descargados += 1
-                            for ruta in (ruta_xml, ruta_pdf):
-                                if Path(ruta).exists():
+                            for ruta, ya_existia in ((ruta_xml, xml_ya_existia), (ruta_pdf, pdf_ya_existia)):
+                                if not ya_existia and Path(ruta).exists():
                                     self._estado.archivos_nuevos.append(ruta)
 
                         completados_tipo += 1

@@ -125,9 +125,21 @@ async def login_sri(
         # #ciAdicional es opcional: solo existe para contribuyentes que generaron
         # un acceso delegado (cedula + clave propia) en el SRI, distinto del
         # RUC y clave originales. Se omite por completo si no se proporciono.
+        # El campo puede no existir en el DOM aunque se haya ingresado un valor
+        # (la cuenta no tiene acceso delegado habilitado): se verifica su
+        # presencia con un timeout corto antes de escribir para no colgar todo
+        # el intento de login con un TimeoutError sin manejar.
         if ci_adicional:
-            await escribir_humanizado(page, "#ciAdicional", ci_adicional)
-            await pausa(300, 700)
+            try:
+                await page.wait_for_selector("#ciAdicional", timeout=3000)
+                await escribir_humanizado(page, "#ciAdicional", ci_adicional)
+                await pausa(300, 700)
+            except PlaywrightTimeout:
+                logger.warning(
+                    "Se proporciono cedula adicional pero el formulario no "
+                    "presenta el campo #ciAdicional para RUC %s; se omite y "
+                    "se continua con el flujo normal.", ruc,
+                )
         await escribir_humanizado(page, "#password", password)
         await pausa(500, 1000)
 
