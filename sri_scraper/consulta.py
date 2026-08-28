@@ -510,6 +510,14 @@ async def obtener_filas_pagina(page: Page, tipo_comprobante: str) -> list[FilaCo
 
     for i in range(total):
         row = rows.nth(i)
+        # La fila placeholder "sin resultados" de PrimeFaces (misma clase que
+        # esperar_tabla ya usa para reconocer una consulta valida con 0 filas)
+        # tiene un <td> real dentro -- sin este chequeo se colaba como si fuera
+        # un comprobante mas, con un tipo_y_serie basura, y el orquestador
+        # intentaba (y fallaba) descargarle XML/PDF por cada consulta vacia.
+        clase_fila = await row.get_attribute("class") or ""
+        if "ui-datatable-empty-message" in clase_fila:
+            continue
         celdas = row.locator("td")
         if await celdas.count() == 0:
             continue
