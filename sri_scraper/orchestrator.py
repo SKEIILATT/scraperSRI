@@ -253,7 +253,6 @@ class ScrapingOrchestrator:
                 if self._cancelar:
                     break
 
-                es_retencion = tipo == "6"
                 nombre_tipo = TIPOS_COMPROBANTE.get(tipo, tipo)
                 # Con un solo tipo, todo queda plano en la carpeta general
                 # (comportamiento original). Con varios tipos, cada uno en su
@@ -343,12 +342,11 @@ class ScrapingOrchestrator:
                 if self._cancelar:
                     break
 
-                # --- Descargar reporte del periodo (no aplica a retenciones) ---
-                if not es_retencion:
-                    await _notificar_tipo("Descargando reporte de periodo")
-                    ruta = str(ruta_reporte(p.ruc, p.anio, p.mes, subcarpeta))
-                    ok = await descargar_reporte(page, ruta)
-                    await _notificar_tipo("Reporte descargado" if ok else "Reporte no disponible")
+                # --- Descargar reporte del periodo (todos los tipos, incluidas retenciones) ---
+                await _notificar_tipo("Descargando reporte de periodo")
+                ruta = str(ruta_reporte(p.ruc, p.anio, p.mes, subcarpeta))
+                ok = await descargar_reporte(page, ruta)
+                await _notificar_tipo("Reporte descargado" if ok else "Reporte no disponible")
 
                 # --- Conteo previo + descarga pagina a pagina ---
                 n_paginas = await self._con_watchdog(

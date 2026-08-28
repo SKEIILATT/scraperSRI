@@ -639,7 +639,11 @@ async def _click_flecha_paginador(page: Page, selector: str) -> bool:
     except PlaywrightTimeout:
         logger.warning("Timeout esperando respuesta AJAX del paginador (%s)", selector)
         return False
-    await pausa(600, 1200)
+    # Paginar dentro de una consulta ya exitosa no es una accion puntuada por
+    # reCAPTCHA (a diferencia del submit de aplicar_filtros), asi que aqui no
+    # hace falta ritmo humanizado -- solo un margen minimo para que PrimeFaces
+    # termine de actualizar el DOM de la tabla tras la respuesta AJAX.
+    await pausa(100, 250)
     return True
 
 

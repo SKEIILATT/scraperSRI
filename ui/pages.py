@@ -810,6 +810,26 @@ async def pagina_resultado():
                         btn_primario("Buscar otro periodo", on_click=nueva_consulta)
                         btn_secundario("Probar con otro RUC", on_click=otro_ruc)
 
+            elif nuevos_descargados == 0:
+                # Se encontraron comprobantes pero TODOS ya estaban descargados de
+                # una corrida anterior: mostrar "Proceso completado" aqui haria
+                # parecer que se bajo algo nuevo cuando en realidad no se descargo
+                # nada en esta corrida -- se distingue con su propio mensaje para
+                # que quede claro que el periodo ya estaba al dia.
+                with ui.element("div").style(
+                    "background:#EAF6EE; border:1px solid #A3D9B1; border-radius:4px; "
+                    "padding:18px; margin-bottom:16px; text-align:center;"
+                ):
+                    ui.label("Ya esta todo al dia").style(
+                        f"font-size:18px; font-weight:700; color:{SUCCESS_COLOR}; display:block;"
+                    )
+                    ui.label(
+                        f"Se revisaron {completados} comprobante{'s' if completados != 1 else ''} "
+                        f"de este periodo y ya estaban descargados. No hay nada nuevo."
+                    ).style(
+                        f"font-size:14px; color:{SUCCESS_COLOR}; margin-top:6px; display:block;"
+                    )
+
             else:
                 with ui.element("div").style(
                     "background:#EAF6EE; border:1px solid #A3D9B1; border-radius:4px; "
@@ -842,55 +862,12 @@ async def pagina_resultado():
                             f"font-size:12px; color:{GRIS_MEDIO}; margin-top:4px; display:block;"
                         )
 
-            # Guardar credenciales para sincronizacion automatica nocturna: en su
-            # propia tarjeta (mismo patron visual que "Guardar archivos" mas abajo)
-            # en vez de un checkbox suelto sin contenedor.
-            if completados > 0:
-                ruc_sync = s.get("sri_ruc", "")
-                pwd_sync = s.get("sri_password", "")
-                ci_sync = s.get("sri_ci_adicional", "")
-                if ruc_sync and pwd_sync:
-                    from storage.credentials import guardar as _guardar_cred, tiene_credenciales as _tiene_cred
-                    ya_guardadas = _tiene_cred(ruc_sync)
-                    with ui.element("div").style(
-                        f"background:{FONDO}; border:1px solid {BORDER_COLOR}; border-radius:10px; "
-                        f"padding:18px 20px; margin-bottom:20px; width:100%;"
-                    ):
-                        ui.label("Sincronizacion automatica nocturna").style(
-                            f"font-size:15px; font-weight:700; color:{GRIS_OSCURO}; "
-                            f"display:block; margin-bottom:6px;"
-                        )
-                        ui.label(
-                            "Guarde las credenciales de este RUC para que el proceso "
-                            "nocturno revise automaticamente si aparecen comprobantes "
-                            "nuevos, sin tener que volver a ingresarlas cada vez."
-                        ).style(
-                            f"font-size:13px; color:{GRIS_MEDIO}; display:block; "
-                            f"margin-bottom:12px; line-height:1.5;"
-                        )
-
-                        lbl_cred = ui.label(
-                            "Credenciales ya guardadas para sincronizacion automatica." if ya_guardadas
-                            else ""
-                        ).style(f"font-size:12px; color:{SUCCESS_COLOR}; display:block; margin-bottom:6px;")
-
-                        def _toggle_guardar_cred(e):
-                            if e.value:
-                                try:
-                                    _guardar_cred(ruc_sync, pwd_sync, ci_sync)
-                                    lbl_cred.set_text("Credenciales guardadas correctamente.")
-                                    lbl_cred.style(f"font-size:12px; color:{SUCCESS_COLOR}; display:block; margin-bottom:6px;")
-                                except Exception as exc:
-                                    lbl_cred.set_text(f"No se pudieron guardar: {exc}")
-                                    lbl_cred.style(f"font-size:12px; color:{ERROR_COLOR}; display:block; margin-bottom:6px;")
-
-                        ui.checkbox(
-                            "Guardar credenciales para la sincronizacion nocturna",
-                            value=ya_guardadas,
-                            on_change=_toggle_guardar_cred,
-                        ).style(
-                            f"font-size:13px; color:{GRIS_OSCURO}; font-family:'Inter',sans-serif;"
-                        )
+            # NOTA: la tarjeta de "Guardar credenciales para sincronizacion nocturna"
+            # se removio deliberadamente por decision de producto (aun no se va a
+            # ofrecer esta opcion). storage/credentials.py (guardar/obtener_ci_adicional)
+            # y sync_nocturna.py siguen intactos para cuando se retome -- no se debe
+            # restaurar este bloque de UI solo porque un review automatico lo marque
+            # como "codigo inalcanzable" sin antes confirmar con el usuario.
 
             divider()
 
@@ -899,9 +876,13 @@ async def pagina_resultado():
                 panel_errores(errores)
                 divider()
 
-            # Guardar archivos en carpeta elegida por el usuario
+            # Guardar archivos en carpeta elegida por el usuario: si no hubo nada
+            # nuevo en esta corrida (todo ya estaba descargado de antes), no tiene
+            # sentido ofrecer un ZIP aqui -- el usuario ya se llevo esos archivos
+            # en una corrida anterior, y mostrar el boton de nuevo sugeriria que
+            # hay algo pendiente por bajar cuando no lo hay.
             carpeta_descarga = s.get("carpeta_descarga", "")
-            if completados > 0 and carpeta_descarga:
+            if completados > 0 and carpeta_descarga and nuevos_descargados > 0:
                 with ui.element("div").style(
                     f"background:{FONDO}; border:1px solid {BORDER_COLOR}; border-radius:10px; "
                     f"padding:18px 20px; margin-bottom:20px; width:100%;"
