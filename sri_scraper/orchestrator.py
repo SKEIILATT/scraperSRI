@@ -62,6 +62,10 @@ class ParametrosConsulta:
     mes: int
     dia: int                    # 0 = Todos
     tipos_comprobante: list[str]  # uno o mas; mismo periodo/dia para todos
+    # Cedula adicional (opcional): acceso delegado que el contribuyente genera
+    # en el SRI con clave propia, distinta a la del RUC original, para no
+    # compartir sus credenciales principales.
+    ci_adicional: str = ""
     codigo_colaborador: str = ""
     usuario_colaborador: str = ""
 
@@ -73,6 +77,16 @@ class EstadoProceso:
     completados: int = 0              # acumulado de TODOS los tipos pedidos
     errores: list[str] = field(default_factory=list)
     carpeta_descarga: str = ""
+    # De los `completados`, cuantos ya existian en disco (se omitio la descarga)
+    # vs cuantos se bajaron de verdad en esta corrida. Un comprobante cuenta como
+    # "nuevo" si al menos uno de sus dos archivos (XML o PDF) no existia todavia.
+    ya_existian: int = 0
+    nuevos_descargados: int = 0
+    # Rutas (absolutas, en el servidor) de los archivos efectivamente bajados en
+    # esta corrida -- permite ofrecer un ZIP con "solo lo nuevo" en vez de forzar
+    # a volver a empaquetar toda la carpeta del periodo cuando la mayoria ya se
+    # habia descargado antes.
+    archivos_nuevos: list[str] = field(default_factory=list)
     cancelado: bool = False
     requiere_intervencion: bool = False
     mensaje_intervencion: str = ""
@@ -183,7 +197,7 @@ class ScrapingOrchestrator:
                 # nunca presenta un desafio que un humano pueda resolver a mano, asi
                 # que si ErrorRecaptcha llega aqui es porque ya se agotaron los
                 # reintentos automaticos, no porque falte que alguien haga clic en algo.
-                await login_sri(page, p.ruc, p.password, on_reintento=_progreso_login)
+                await login_sri(page, p.ruc, p.password, ci_adicional=p.ci_adicional, on_reintento=_progreso_login)
             except ErrorRecaptcha as e:
                 self._estado.errores.append(str(e))
                 self._estado.finalizado = True
@@ -378,7 +392,8 @@ class ScrapingOrchestrator:
                         ruta_xml = str(ruta_descarga(
                             p.ruc, p.anio, p.mes, fila.nombre_archivo, "xml", fila.es_retencion, subcarpeta,
                         ))
-                        if Path(ruta_xml).exists():
+                        xml_ya_existia = Path(ruta_xml).exists()
+                        if xml_ya_existia:
                             ok_xml = True
                         else:
                             ok_xml = await self._descargar_con_watchdog(
@@ -394,7 +409,8 @@ class ScrapingOrchestrator:
                         ruta_pdf = str(ruta_descarga(
                             p.ruc, p.anio, p.mes, fila.nombre_archivo, "pdf", fila.es_retencion, subcarpeta,
                         ))
-                        if Path(ruta_pdf).exists():
+                        pdf_ya_existia = Path(ruta_pdf).exists()
+                        if pdf_ya_existia:
                             ok_pdf = True
                         else:
                             ok_pdf = await self._descargar_con_watchdog(
@@ -404,6 +420,18 @@ class ScrapingOrchestrator:
                         if not ok_pdf:
                             msg = f"{nombre_tipo}: PDF fallido: {fila.tipo_y_serie}"
                             self._estado.errores.append(msg)
+
+                        # Un comprobante es "nuevo" si al menos uno de sus dos
+                        # archivos no existia antes de esta corrida. Se guardan
+                        # las rutas de ambos (si quedaron en disco) para poder
+                        # ofrecer despues un ZIP con unicamente lo nuevo.
+                        if xml_ya_existia and pdf_ya_existia:
+                            self._estado.ya_existian += 1
+                        else:
+                            self._estado.nuevos_descargados += 1
+                            for ruta in (ruta_xml, ruta_pdf):
+                                if Path(ruta).exists():
+                                    self._estado.archivos_nuevos.append(ruta)
 
                         completados_tipo += 1
                         self._estado.completados = completados_previos + completados_tipo

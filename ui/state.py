@@ -17,6 +17,9 @@ class SesionUsuario:
 
     # Credenciales SRI (solo en memoria, nunca se persisten)
     sri_ruc: str = ""
+    # Cedula adicional (opcional): acceso delegado que el contribuyente puede
+    # generar en el SRI, con clave propia distinta a la del RUC original.
+    sri_ci_adicional: str = ""
     sri_password: str = ""
 
     # Parametros de consulta

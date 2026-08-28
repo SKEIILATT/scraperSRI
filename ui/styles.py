@@ -29,7 +29,7 @@ SUCCESS_COLOR    = "#1A7A4A"
 WARNING_COLOR    = "#856404"
 BORDER_COLOR     = "#E0DEEA"
 
-# Aliases para compatibilidad con código existente
+# Aliases para compatibilidad con codigo existente
 GRIS_OSCURO = NAVY
 GRIS_MEDIO  = NAVY_MED
 GRIS_CLARO  = FONDO
@@ -90,7 +90,7 @@ CSS_GLOBAL = f"""
     min-height: 100vh !important;
   }}
 
-  /* ── Tipografía global ─────────────────────────── */
+  /* ── Tipografia global ─────────────────────────── */
   .material-icons, .q-icon {{
     font-family: 'Material Icons' !important;
   }}

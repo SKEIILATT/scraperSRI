@@ -33,7 +33,16 @@ class Settings:
     APP_SECRET_KEY: str = os.getenv("APP_SECRET_KEY", "change_me")
 
     # Playwright
-    BROWSER_PROFILE_DIR: str = os.getenv("BROWSER_PROFILE_DIR", "./browser_profile")
+    # expandvars() permite usar variables de entorno de Windows (ej. %LOCALAPPDATA%)
+    # dentro del valor -- python-dotenv NO las expande por su cuenta. Esto es clave
+    # cuando el proyecto vive en un disco compartido y varias personas corren la
+    # app desde sus propias PCs con el MISMO .env: cada una necesita su propio
+    # perfil de navegador local (Chrome/Edge no soportan un perfil persistente
+    # compartido por red -- se bloquea con uso concurrente y arriesga corromper
+    # las bases SQLite internas del perfil vía SMB). Con %LOCALAPPDATA% en la
+    # ruta, el mismo .env compartido resuelve a una carpeta local distinta en
+    # cada maquina/usuario sin necesitar configuracion por persona.
+    BROWSER_PROFILE_DIR: str = os.path.expandvars(os.getenv("BROWSER_PROFILE_DIR", "./browser_profile"))
     BROWSER_HEADLESS: bool = os.getenv("BROWSER_HEADLESS", "false").lower() == "true"
     # Ruta explicita a un Chrome/Edge ya instalado (evita depender de la
     # deteccion de canal por registro de Windows, poco confiable en equipos

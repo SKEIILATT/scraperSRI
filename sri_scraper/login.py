@@ -45,6 +45,7 @@ async def login_sri(
     page: Page,
     ruc: str,
     password: str,
+    ci_adicional: str = "",
     on_reintento: "Callable[[int, int], Awaitable[None]] | None" = None,
 ) -> None:
     """
@@ -60,6 +61,10 @@ async def login_sri(
     decida si termina el proceso o deja una ultima oportunidad de revision manual.
 
     Args:
+        ci_adicional: cedula de acceso delegado (campo opcional "#ciAdicional"
+                      del formulario, entre usuario y password). El contribuyente
+                      puede generarla en el SRI con clave propia para no compartir
+                      las credenciales del RUC original. Vacio = flujo normal.
         on_reintento: callback opcional invocado al iniciar cada intento con
                       (intento_actual, total_intentos), para que la UI muestre el estado.
 
@@ -117,6 +122,12 @@ async def login_sri(
         # #usuario es el campo visible; el JS de la pagina copia su valor a #username (oculto)
         await escribir_humanizado(page, "#usuario", ruc)
         await pausa(300, 700)
+        # #ciAdicional es opcional: solo existe para contribuyentes que generaron
+        # un acceso delegado (cedula + clave propia) en el SRI, distinto del
+        # RUC y clave originales. Se omite por completo si no se proporciono.
+        if ci_adicional:
+            await escribir_humanizado(page, "#ciAdicional", ci_adicional)
+            await pausa(300, 700)
         await escribir_humanizado(page, "#password", password)
         await pausa(500, 1000)
 

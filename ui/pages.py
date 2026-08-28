@@ -6,6 +6,7 @@ Flujo: Login interno -> Credenciales SRI -> Configuracion consulta -> Progreso -
 
 import asyncio
 import logging
+import re
 from calendar import monthrange
 from datetime import datetime
 from pathlib import Path
@@ -97,6 +98,7 @@ def _sesion() -> dict:
             "nombre_usuario_banco": "",
             "nombre_completo_colaborador": "",
             "sri_ruc": "",
+            "sri_ci_adicional": "",
             "sri_password": "",
             "anio": str(datetime.now().year),
             "mes": str(datetime.now().month),
@@ -107,6 +109,9 @@ def _sesion() -> dict:
             "fase_proceso": "",
             "total_comprobantes": 0,
             "completados": 0,
+            "ya_existian": 0,
+            "nuevos_descargados": 0,
+            "archivos_nuevos": [],
             "errores_proceso": [],
             "requiere_intervencion": False,
             "mensaje_intervencion": "",
@@ -312,6 +317,18 @@ async def pagina_credenciales_sri():
             lbl_err_ruc = _lbl_error()
 
             _input_separador()
+            _label_campo("Cedula adicional (opcional)")
+            ci_adicional_input = (
+                ui.input(placeholder="10 digitos - solo si el contribuyente le dio acceso delegado")
+                .props("outlined dense maxlength=10")
+                .style("width:100%;")
+            )
+            ui.label(
+                "Dejar en blanco si va a ingresar con el RUC y clave originales del contribuyente."
+            ).style(f"font-size:11px; color:{GRIS_MEDIO}; margin-top:4px; display:block;")
+            lbl_err_ci_adicional = _lbl_error()
+
+            _input_separador()
             _label_campo("Contrasena SRI")
             pass_input = (
                 ui.input(password=True, placeholder="Clave SRI")
@@ -349,19 +366,33 @@ async def pagina_credenciales_sri():
                     return "El RUC o cedula es obligatorio."
                 return ""
 
+            def _validar_ci_adicional(ci: str) -> str:
+                if not ci:
+                    return ""
+                if not re.match(r"^\d{10}$", ci):
+                    return "La cedula adicional debe tener 10 digitos numericos."
+                return ""
+
             def validar_y_continuar():
                 lbl_err_ruc.set_text("")
+                lbl_err_ci_adicional.set_text("")
                 lbl_err_pass.set_text("")
                 lbl_err_confirm.set_text("")
                 lbl_err_gen.set_text("")
 
                 ruc = (ruc_input.value or "").strip()
+                ci_adicional = (ci_adicional_input.value or "").strip()
                 pwd = pass_input.value or ""
                 pwd_confirm = pass_confirm_input.value or ""
 
                 err_ruc = _validar_ruc(ruc)
                 if err_ruc:
                     lbl_err_ruc.set_text(err_ruc)
+                    return
+
+                err_ci_adicional = _validar_ci_adicional(ci_adicional)
+                if err_ci_adicional:
+                    lbl_err_ci_adicional.set_text(err_ci_adicional)
                     return
 
                 if not pwd:
@@ -380,11 +411,13 @@ async def pagina_credenciales_sri():
                     return
 
                 s["sri_ruc"] = ruc
+                s["sri_ci_adicional"] = ci_adicional
                 s["sri_password"] = pwd
                 s["paso"] = 3
                 ui.navigate.to("/configuracion")
 
             ruc_input.on("keydown.enter", validar_y_continuar)
+            ci_adicional_input.on("keydown.enter", validar_y_continuar)
             pass_input.on("keydown.enter", validar_y_continuar)
             pass_confirm_input.on("keydown.enter", validar_y_continuar)
 
@@ -511,6 +544,9 @@ async def pagina_configuracion():
                 s["errores_proceso"] = []
                 s["completados"] = 0
                 s["total_comprobantes"] = 0
+                s["ya_existian"] = 0
+                s["nuevos_descargados"] = 0
+                s["archivos_nuevos"] = []
                 ui.navigate.to("/descarga")
 
             with ui.element("div").style("display:flex; gap:10px; margin-top:24px;"):
@@ -577,6 +613,9 @@ async def pagina_descarga():
         s["fase_proceso"] = estado.fase
         s["total_comprobantes"] = estado.total
         s["completados"] = estado.completados
+        s["ya_existian"] = estado.ya_existian
+        s["nuevos_descargados"] = estado.nuevos_descargados
+        s["archivos_nuevos"] = list(estado.archivos_nuevos)
         s["errores_proceso"] = list(estado.errores)
         s["requiere_intervencion"] = estado.requiere_intervencion
         s["mensaje_intervencion"] = estado.mensaje_intervencion
@@ -675,6 +714,7 @@ async def pagina_descarga():
         # ingreso el usuario en el paso de configuracion.
         params = ParametrosConsulta(
             ruc=s.get("sri_ruc", ""),
+            ci_adicional=s.get("sri_ci_adicional", ""),
             password=s.get("sri_password", ""),
             anio=int(s.get("anio", datetime.now().year)),
             mes=int(s.get("mes", 1)),
@@ -719,6 +759,9 @@ async def pagina_resultado():
     errores = s.get("errores_proceso", [])
     completados = s.get("completados", 0)
     total = s.get("total_comprobantes", 0)
+    ya_existian = s.get("ya_existian", 0)
+    nuevos_descargados = s.get("nuevos_descargados", 0)
+    archivos_nuevos = s.get("archivos_nuevos", [])
     error_critico = any(
         kw in e.lower() for e in errores
         for kw in ["credencial", "incorrecto", "acceso", "login"]
@@ -734,6 +777,7 @@ async def pagina_resultado():
     def otro_ruc():
         # Mantiene config (periodo, tipo) pero limpia credenciales SRI
         s.pop("sri_ruc", None)
+        s.pop("sri_ci_adicional", None)
         s.pop("sri_password", None)
         s["paso"] = 2
         s["proceso_finalizado"] = False
@@ -782,37 +826,21 @@ async def pagina_resultado():
                     ui.label(conteo).style(
                         f"font-size:14px; color:{SUCCESS_COLOR}; margin-top:6px; display:block;"
                     )
-
-            # Opcion de guardar credenciales para sync automatica
-            if completados > 0:
-                ruc_sync = s.get("sri_ruc", "")
-                pwd_sync = s.get("sri_password", "")
-                if ruc_sync and pwd_sync:
-                    from storage.credentials import guardar as _guardar_cred, tiene_credenciales as _tiene_cred
-                    ya_guardadas = _tiene_cred(ruc_sync)
-                    lbl_cred = ui.label(
-                        "Credenciales ya guardadas para sincronizacion automatica." if ya_guardadas
-                        else ""
-                    ).style(f"font-size:12px; color:{SUCCESS_COLOR}; display:block; margin-top:6px;")
-
-                    def _toggle_guardar_cred(e):
-                        if e.value:
-                            try:
-                                _guardar_cred(ruc_sync, pwd_sync)
-                                lbl_cred.set_text("Credenciales guardadas correctamente.")
-                                lbl_cred.style(f"font-size:12px; color:{SUCCESS_COLOR}; display:block; margin-top:6px;")
-                            except Exception as exc:
-                                lbl_cred.set_text(f"No se pudieron guardar: {exc}")
-                                lbl_cred.style(f"font-size:12px; color:{ERROR_COLOR}; display:block; margin-top:6px;")
-
-                    ui.checkbox(
-                        "Guardar credenciales para sincronizacion automatica nocturna",
-                        value=ya_guardadas,
-                        on_change=_toggle_guardar_cred,
-                    ).style(
-                        f"font-size:13px; color:{GRIS_OSCURO}; margin-top:12px; "
-                        f"font-family:'Inter',sans-serif;"
-                    )
+                    # Solo se muestra el desglose cuando hubo archivos omitidos por
+                    # ya existir: en una corrida completamente nueva, "nuevos" y
+                    # "completados" son el mismo numero y repetirlo no aporta nada.
+                    if ya_existian > 0:
+                        detalle_nuevos = (
+                            "1 nuevo" if nuevos_descargados == 1
+                            else f"{nuevos_descargados} nuevos"
+                        )
+                        detalle_previos = (
+                            "1 ya estaba descargado" if ya_existian == 1
+                            else f"{ya_existian} ya estaban descargados"
+                        )
+                        ui.label(f"{detalle_nuevos}  |  {detalle_previos}").style(
+                            f"font-size:12px; color:{GRIS_MEDIO}; margin-top:4px; display:block;"
+                        )
 
             divider()
 
@@ -834,7 +862,23 @@ async def pagina_resultado():
                     ui.label(
                         "Descargue un ZIP con todos los comprobantes de esta sesion a su equipo."
                     ).style(
-                        f"font-size:13px; color:{GRIS_MEDIO}; display:block; margin-bottom:14px; line-height:1.5;"
+                        f"font-size:13px; color:{GRIS_MEDIO}; display:block; margin-bottom:6px; line-height:1.5;"
+                    )
+                    # Aclaracion importante para operadores sin acceso a la BD: la
+                    # deduplicacion (que no se vuelva a descargar lo mismo) depende
+                    # de que estos archivos sigan existiendo en el servidor, NO de
+                    # que alguien haya presionado este boton. Sin este aviso, es
+                    # facil pensar (incorrectamente) que "guardar el ZIP" es lo que
+                    # el sistema usa para recordar, y borrar la carpeta del servidor
+                    # pensando que ya no hace falta.
+                    ui.label(
+                        "Los comprobantes ya quedaron guardados automaticamente en el "
+                        "sistema. Este boton solo genera una copia adicional para su "
+                        "equipo; no borre la carpeta original del servidor, ya que de "
+                        "ahi depende que no se vuelvan a descargar la proxima vez."
+                    ).style(
+                        f"font-size:12px; color:{GRIS_MEDIO}; font-style:italic; "
+                        f"display:block; margin-bottom:14px; line-height:1.5;"
                     )
 
                     notif_guardar = ui.label("").style(
@@ -859,7 +903,35 @@ async def pagina_resultado():
                             notif_guardar.set_text(f"Error al generar el archivo: {exc}")
                             notif_guardar.style(f"color:{ERROR_COLOR};")
 
-                    btn_primario("Guardar en mi equipo", on_click=guardar_en_equipo)
+                    # Solo tiene sentido ofrecer un ZIP separado de "lo nuevo" cuando
+                    # esta corrida realmente omitio archivos por ya existir: si todo
+                    # es nuevo, este boton descargaria exactamente lo mismo que
+                    # "Guardar en mi equipo" y solo confundiria.
+                    if ya_existian > 0 and archivos_nuevos:
+                        with ui.element("div").style("display:flex; gap:10px; margin-top:10px; flex-wrap:wrap;"):
+                            btn_primario("Guardar en mi equipo", on_click=guardar_en_equipo)
+
+                            async def guardar_solo_nuevos():
+                                notif_guardar.set_text("Generando archivo ZIP...")
+                                notif_guardar.style(f"color:{GRIS_MEDIO};")
+                                try:
+                                    contenido = await asyncio.to_thread(
+                                        _generar_zip_archivos, carpeta_descarga, archivos_nuevos,
+                                    )
+                                    nombre_zip = f"{Path(carpeta_descarga).name}_nuevos.zip"
+                                    ui.download(contenido, nombre_zip)
+                                    notif_guardar.set_text(f"Descarga iniciada: {nombre_zip}")
+                                    notif_guardar.style(f"color:{SUCCESS_COLOR};")
+                                except Exception as exc:
+                                    notif_guardar.set_text(f"Error al generar el archivo: {exc}")
+                                    notif_guardar.style(f"color:{ERROR_COLOR};")
+
+                            btn_secundario(
+                                f"Descargar solo lo nuevo ({nuevos_descargados})",
+                                on_click=guardar_solo_nuevos,
+                            )
+                    else:
+                        btn_primario("Guardar en mi equipo", on_click=guardar_en_equipo)
 
             # Acciones
             with ui.element("div").style("display:flex; gap:10px; margin-top:8px; flex-wrap:wrap;"):
@@ -1084,6 +1156,30 @@ def _generar_zip_carpeta(carpeta: str) -> bytes:
         for archivo in origen.rglob("*"):
             if archivo.is_file():
                 zf.write(archivo, arcname=str(archivo.relative_to(origen)))
+    return buf.getvalue()
+
+
+def _generar_zip_archivos(carpeta_base: str, archivos: list[str]) -> bytes:
+    """
+    Igual que _generar_zip_carpeta pero solo con la lista de archivos dada
+    (rutas absolutas). Se usa para el ZIP de "solo lo nuevo" de esta corrida,
+    en vez de forzar a volver a empaquetar todo el periodo cuando la mayoria
+    de los comprobantes ya se habian descargado antes.
+    """
+    import io
+    import zipfile
+
+    origen = Path(carpeta_base)
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for ruta_str in archivos:
+            archivo = Path(ruta_str)
+            if archivo.is_file():
+                try:
+                    arcname = str(archivo.relative_to(origen))
+                except ValueError:
+                    arcname = archivo.name
+                zf.write(archivo, arcname=arcname)
     return buf.getvalue()
 
 

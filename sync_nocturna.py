@@ -26,7 +26,7 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).parent / ".env")
 
 from config import settings
-from storage.credentials import obtener, tiene_credenciales
+from storage.credentials import obtener, obtener_ci_adicional, tiene_credenciales
 from sri_scraper.orchestrator import ScrapingOrchestrator, ParametrosConsulta, EstadoProceso
 
 # ── Configuracion ─────────────────────────────────────────────────────────────
@@ -113,11 +113,19 @@ async def _sincronizar_uno(ruc: str, anio: int, mes: int, tipo: str) -> None:
         )
         return
 
+    try:
+        ci_adicional = obtener_ci_adicional(ruc) or ""
+    except Exception:
+        # No critico: si falla la lectura, se continua sin cedula adicional
+        # (equivale a que el contribuyente no tenga acceso delegado configurado).
+        ci_adicional = ""
+
     logger.info("Sincronizando RUC=%s periodo=%d/%02d tipo=%s", ruc, anio, mes, tipo)
 
     params = ParametrosConsulta(
         ruc=ruc,
         password=password,
+        ci_adicional=ci_adicional,
         anio=anio,
         mes=mes,
         dia=0,

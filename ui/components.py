@@ -4,6 +4,7 @@ Componentes reutilizables de UI para Banco Guayaquil.
 
 from nicegui import app as _nicegui_app
 from nicegui import ui
+from config import settings
 from ui.styles import (
     MAGENTA, MAGENTA_HOVER, MAGENTA_LIGHTEST,
     NAVY, NAVY_MED, NAVY_LIGHT,
@@ -76,13 +77,18 @@ def header():
         # Controles derecha del header
         with ui.element("div").style("display:flex; align-items:center; gap:10px;"):
             if _nicegui_app.storage.user.get("autenticado"):
-                ui.link("Historial", "/historial").style(
-                    f"font-size:13px; font-weight:600; color:{MAGENTA}; "
-                    f"font-family:'Inter',sans-serif; text-decoration:none; "
-                    f"padding:9px 16px; border-radius:8px; "
-                    f"border:2px solid {MAGENTA}; "
-                    f"white-space:nowrap;"
-                )
+                # En modo bypass no hay BD real conectada, asi que no existe
+                # historial que consultar (T_COMPROBANTES_SRI nunca se inserta,
+                # solo se loguea). Mostrar el link ahi solo lleva a una pagina
+                # vacia explicando que no hay conexion — mejor no mostrarlo.
+                if not settings.AUTH_BYPASS_MODE:
+                    ui.link("Historial", "/historial").style(
+                        f"font-size:13px; font-weight:600; color:{MAGENTA}; "
+                        f"font-family:'Inter',sans-serif; text-decoration:none; "
+                        f"padding:9px 16px; border-radius:8px; "
+                        f"border:2px solid {MAGENTA}; "
+                        f"white-space:nowrap;"
+                    )
 
                 def _cerrar_sesion():
                     for k in list(_nicegui_app.storage.user.keys()):
@@ -101,7 +107,7 @@ def header():
 # ── Contenedor principal centrado ─────────────────────────────────────────────
 
 def centrar_contenido():
-    """Wrapper de página que centra el contenido horizontalmente y lo hace responsivo."""
+    """Wrapper de pagina que centra el contenido horizontalmente y lo hace responsivo."""
     return ui.element("div").style(
         "width:100%; min-height:calc(100vh - 60px); "
         "display:flex; flex-direction:column; align-items:center; "
@@ -146,8 +152,13 @@ def stepper(paso_actual: int):
 
                 if i < len(pasos):
                     done = i < paso_actual
+                    # margin-top:15px centra la linea con el circulo (32px de alto,
+                    # centro en 16px) en vez de dejarla pegada al borde superior:
+                    # la fila usa align-items:flex-start (necesario para que las
+                    # columnas circulo+etiqueta no se estiren), asi que sin este
+                    # offset la linea de 2px queda anclada en y=0 en vez de y=15.
                     ui.element("div").style(
-                        f"flex:1; height:2px; margin:0 6px; margin-bottom:26px; "
+                        f"flex:1; height:2px; margin:15px 6px 0; "
                         f"background:{'linear-gradient(to right,'+SUCCESS_COLOR+','+SUCCESS_COLOR+')' if done else NAVY_LIGHT}; "
                         f"border-radius:1px; min-width:8px;"
                     )
@@ -183,7 +194,7 @@ def barra_progreso(completados: int, total: int, fase: str):
         )
 
 
-# ── Panel de intervención ─────────────────────────────────────────────────────
+# ── Panel de intervencion ─────────────────────────────────────────────────────
 
 def panel_intervencion(mensaje: str, on_resolver, on_cancelar):
     with ui.element("div").style(
@@ -224,17 +235,25 @@ def panel_errores(errores: list[str]):
             f"font-size:13px; font-weight:700; color:{ERROR_COLOR}; "
             f"margin-bottom:10px; display:block; font-family:'Inter',sans-serif;"
         )
-        for e in errores[:20]:
-            with ui.element("div").style(
-                f"font-size:13px; color:{NAVY}; padding:5px 0; "
-                f"border-bottom:1px solid #FECACA; font-family:'Inter',sans-serif;"
-            ):
-                ui.label(e)
-        if len(errores) > 20:
-            ui.label(f"... y {len(errores) - 20} mas.").style(
-                f"font-size:12px; color:{NAVY_MED}; margin-top:6px; "
-                f"font-family:'Inter',sans-serif;"
-            )
+        # Alto acotado con scroll propio: algunos errores (ej. una excepcion de
+        # Playwright) traen varias lineas de detalle tecnico y, sin este limite,
+        # estiran toda la tarjeta de resultado en vez de quedarse contenidos.
+        with ui.element("div").style(
+            "max-height:240px; overflow-y:auto; overflow-x:hidden; width:100%;"
+        ):
+            for e in errores[:20]:
+                with ui.element("div").style(
+                    f"font-size:13px; color:{NAVY}; padding:8px 2px; "
+                    f"border-bottom:1px solid #FECACA; font-family:'Inter',sans-serif; "
+                    f"line-height:1.5; white-space:pre-wrap; word-break:break-word; "
+                    f"overflow-wrap:anywhere;"
+                ):
+                    ui.label(e)
+            if len(errores) > 20:
+                ui.label(f"... y {len(errores) - 20} mas.").style(
+                    f"font-size:12px; color:{NAVY_MED}; margin-top:6px; padding:0 2px; "
+                    f"display:block; font-family:'Inter',sans-serif;"
+                )
 
 
 # ── Separador ─────────────────────────────────────────────────────────────────

@@ -22,7 +22,7 @@ from .humanize import (
 logger = logging.getLogger(__name__)
 
 # URL del gateway del portal (tuportal-internet) para comprobantes recibidos.
-# redireccion=57 e idGrupo=55 son los parametros del menu "Comprobantes electrónicos recibidos".
+# redireccion=57 e idGrupo=55 son los parametros del menu "Comprobantes electronicos recibidos".
 # Este gateway maneja la autenticacion de tuportal-internet y luego redirige al JSF.
 URL_COMPROBANTES_PORTAL = (
     "https://srienlinea.sri.gob.ec/tuportal-internet/accederAplicacion.jspa"
